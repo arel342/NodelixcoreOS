@@ -126,7 +126,7 @@ termux-setup-storage
 Clone repository:
 
 ```bash
-git clone https://github.com/alfaidin/NodelixcoreOS
+git clone https://github.com/arel342/NodelixcoreOS
 ```
 
 Masuk ke project:
