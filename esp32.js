@@ -119,6 +119,7 @@ module.exports = ({ app, broadcast, notify }) => {
             esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap },
             battery: c.battery || null,
             current: c.current || null,
+            environment: raw && raw.environment || null,
             relays: (raw ? raw.relays : []).map((r, i) => ({ ...r, name: labels[i] || r.name })),
             alerts: Object.entries(act).map(([key, a]) => ({ key, ...a })),
             cal, zeroing: !!zeroing,
@@ -163,19 +164,20 @@ module.exports = ({ app, broadcast, notify }) => {
     // ---------- Routes (semua sudah dilindungi login di server.js) ----------
     app.get('/api/esp32/status', (req, res) => res.json({ ...snapshot(), history: hist }));
 
-    app.post('/api/esp32/relay', async (req, res) => {
-        const { id, state } = req.body || {};
+    async function setRelay(id, state) {
         const ch = id === 'all' ? 'all' : parseInt(id, 10);
         const max = raw ? raw.relays.length : 3;
-        if (ch !== 'all' && !(ch >= 1 && ch <= max)) return res.status(400).json({ success: false, message: T('esp.badChannel') });
-        try {
-            const j = await call(`/api/relay?ch=${ch}&state=${state ? 1 : 0}`, 'POST');
-            if (raw && j.relays) raw.relays = j.relays;
-            push();
-            res.json({ success: true });
-        } catch (e) {
-            res.status(502).json({ success: false, message: T('esp.noResp', { e: e.message }) });
-        }
+        if (ch !== 'all' && !(ch >= 1 && ch <= max)) throw new Error(T('esp.badChannel'));
+        const j = await call(`/api/relay?ch=${ch}&state=${state ? 1 : 0}`, 'POST');
+        if (raw && j.relays) raw.relays = j.relays;
+        push();
+    }
+
+    app.post('/api/esp32/relay', async (req, res) => {
+        const { id, state } = req.body || {};
+        if (state !== true && state !== false && state !== 0 && state !== 1) return res.status(400).json({ success: false, message: T('esp.badChannel') });
+        setRelay(id, !!state).then(() => res.json({ success: true }))
+            .catch(e => res.status(e.message === T('esp.badChannel') ? 400 : 502).json({ success: false, message: e.message === T('esp.badChannel') ? e.message : T('esp.noResp', { e: e.message }) }));
     });
 
     app.post('/api/esp32/calibrate', (req, res) => {
@@ -209,6 +211,7 @@ module.exports = ({ app, broadcast, notify }) => {
 
     return {
         snapshot,
+        setRelay,
         start() { if (!E('ESP32_IP', '')) console.log('[ESP32] ESP32_IP belum diisi di .env'); poll(); },
         stop() { clearTimeout(timer); }
     };

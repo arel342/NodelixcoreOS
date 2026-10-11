@@ -5,12 +5,13 @@
   - Relay 4 channel (relay 1 & 2 digabung di GPIO 26)
   - Server (Termux) mengambil data lewat IP: GET /api/data, POST /api/relay
 
-  Hanya memakai library bawaan board ESP32 (WiFi, WebServer, ESPmDNS).
+  Library: bawaan ESP32 (WiFi, WebServer, ESPmDNS) dan DHT sensor library by Adafruit.
   Board: "ESP32 Dev Module".
 */
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <DHT.h>
 
 // ===================== KONFIGURASI =====================
 const char* WIFI_SSID = "your-wifi-name";
@@ -19,6 +20,13 @@ const char* API_KEY   = "replace-this-API";   // harus sama dengan ESP32_API_KEY
 
 #define USE_STATIC_IP 1                              // 1 = IP tetap (samakan dengan ESP32_IP di .env)
 IPAddress IP_ADDR(192, 168, 11, 50), IP_GW(192, 168, 11, 1), IP_MASK(255, 255, 255, 0), IP_DNS(192, 168, 11, 1);
+
+// DHT11: VCC -> 3V3, GND -> GND, DATA -> GPIO 4
+#define PIN_DHT 4
+DHT dht(PIN_DHT, DHT11);
+portMUX_TYPE dhtMux = portMUX_INITIALIZER_UNLOCKED;
+float dhtTemperature = NAN, dhtHumidity = NAN;
+bool dhtValid = false;
 
 // --- Baterai: R1 ke baterai+, R2 ke GND. en=false -> pin tidak dibaca (jangan diaktifkan jika belum dipasang)
 struct Tap { const char* id; uint8_t pin; bool en; float ratio; float mv; float v; };
@@ -106,7 +114,16 @@ AcData sampleCurrent() {
 
 void sensorTask(void*) {
   float hist[5] = {0}, ema = 0; uint8_t hi = 0; bool first = true;
+  uint32_t lastDht = 0;
   for (;;) {
+    if (millis() - lastDht >= 2000) {
+      lastDht = millis();
+      float temp = dht.readTemperature(), humidity = dht.readHumidity();
+      portENTER_CRITICAL(&dhtMux);
+      dhtValid = !isnan(temp) && !isnan(humidity);
+      if (dhtValid) { dhtTemperature = temp; dhtHumidity = humidity; }
+      portEXIT_CRITICAL(&dhtMux);
+    }
     for (auto& t : taps) if (t.en) {
       float mv = readTapMv(t.pin), v = mv / 1000.0f * t.ratio;
       t.mv = mv;
@@ -140,7 +157,7 @@ int relaysJson(char* b, int sz) {
 
 void hData() {
   if (!authOk()) return;
-  char b[1300];
+  char b[1600];
   int n = snprintf(b, sizeof(b), "{\"ok\":true,\"device\":\"esp32-plts\",\"fw\":\"1.0\",\"ip\":\"%s\",\"rssi\":%d,\"uptime\":%lu,\"heap\":%u,\"battery\":[",
                    WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000, (unsigned)ESP.getFreeHeap());
   for (int i = 0; i < 3; i++)
@@ -150,7 +167,12 @@ void hData() {
   n += snprintf(b + n, sizeof(b) - n, "],\"current\":{\"pin\":%d,\"irms\":%.4f,\"ipk\":%.3f,\"mean_mv\":%.1f,\"clip\":%d,\"n\":%u},\"relays\":",
                 PIN_ACS, a.irms, a.ipk, a.mean, a.clip, (unsigned)a.n);
   n += relaysJson(b + n, sizeof(b) - n);
-  snprintf(b + n, sizeof(b) - n, "}");
+  float temp, humidity; bool valid;
+  portENTER_CRITICAL(&dhtMux); temp = dhtTemperature; humidity = dhtHumidity; valid = dhtValid; portEXIT_CRITICAL(&dhtMux);
+  n += snprintf(b + n, sizeof(b) - n, ",\"environment\":{\"valid\":%s,\"temperature\":", valid ? "true" : "false");
+  n += valid ? snprintf(b + n, sizeof(b) - n, "%.1f", temp) : snprintf(b + n, sizeof(b) - n, "null");
+  n += snprintf(b + n, sizeof(b) - n, ",\"humidity\":");
+  n += valid ? snprintf(b + n, sizeof(b) - n, "%.1f}}", humidity) : snprintf(b + n, sizeof(b) - n, "null}}");
   server.send(200, "application/json", b);
 }
 
@@ -180,6 +202,7 @@ void setup() {
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);          // rentang ~0.15 - 3.1 V
+  dht.begin();
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);

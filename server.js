@@ -65,19 +65,6 @@ async function notify(text) {
     } catch { return false; }
 }
 
-// Bantu cari chat id: tampil di console saat server start (lalu salin ke .env)
-async function detectChat() {
-    const tok = env('TELEGRAM_BOT_TOKEN');
-    if (!tok || env('TELEGRAM_CHAT_ID')) return;
-    try {
-        const r = await (await fetch(`https://api.telegram.org/bot${tok}/getUpdates`, { signal: AbortSignal.timeout(8000) })).json();
-        const ids = [...new Set((r.result || []).map(u => (u.message || u.my_chat_member || {}).chat).filter(Boolean)
-            .map(c => `${c.id} (${c.first_name || c.title || c.username || '-'})`))];
-        console.log(ids.length ? `[Telegram] Isi TELEGRAM_CHAT_ID di .env. Kandidat: ${ids.join(', ')}`
-            : '[Telegram] TELEGRAM_CHAT_ID kosong. Kirim /start ke bot, lalu restart server.');
-    } catch { console.log('[Telegram] Gagal membaca getUpdates (cek internet / token).'); }
-}
-
 // ================= WEBSOCKET =================
 function broadcast(obj) {
     const msg = JSON.stringify(obj);
@@ -187,6 +174,34 @@ const system = require('./system')({ app, broadcast });
 // ================= TERMINAL COMMAND (Pengaturan > Terminal) =================
 require('./terminal')({ app, saveEnv });
 
+let webRunning = false, servicesStarted = false;
+function setWebEnabled(enabled) {
+    if (enabled) return new Promise((resolve, reject) => {
+        if (server.listening) { webRunning = true; return resolve(true); }
+        const onError = e => { server.off('error', onError); reject(e); };
+        server.once('error', onError);
+        server.listen(PORT, '0.0.0.0', () => {
+            server.off('error', onError);
+            webRunning = true;
+            console.log(`[Web] Server aktif kembali di port ${PORT}.`);
+            resolve(true);
+        });
+    });
+    if (!server.listening) { webRunning = false; return Promise.resolve(false); }
+    wss.clients.forEach(ws => ws.terminate());
+    return new Promise((resolve, reject) => {
+        server.close(e => {
+            webRunning = false;
+            if (e) return reject(e);
+            console.log('[Web] HTTP dan WebSocket dimatikan melalui Telegram; layanan perangkat tetap aktif.');
+            resolve(false);
+        });
+        if (server.closeAllConnections) server.closeAllConnections();
+    });
+}
+
+const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning });
+
 wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
     ws.send(JSON.stringify({ type: 'SENSOR', data: esp32.snapshot() }));
@@ -254,7 +269,7 @@ app.delete('/api/files', wrap(async (req, res) => {
     res.json({ success: true });
 }));
 
-server.listen(PORT, '0.0.0.0', () => {
+function startServices() {
     const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
     console.log('=================================');
     (ips.length ? ips : ['localhost']).forEach(ip => console.log(`Server aktif: http://${ip}:${PORT}`));
@@ -264,5 +279,13 @@ server.listen(PORT, '0.0.0.0', () => {
     esp32.start();
     door.start();
     system.start();
-    detectChat();
+    telegram.start().then(() => telegram.welcome());
+}
+
+setWebEnabled(true).then(() => {
+    webRunning = true;
+    if (!servicesStarted) { servicesStarted = true; startServices(); }
+}).catch(e => {
+    console.error('[Web] Gagal menjalankan server:', e.message);
+    process.exitCode = 1;
 });

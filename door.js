@@ -28,7 +28,7 @@ module.exports = ({ app, broadcast, notify }) => {
     };
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, boot = null, cursor = 0;
-    let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, timer = null;
+    let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
     const lastMsg = {};
     const base = () => `http://${E('DOOR_IP', '')}:${N('DOOR_PORT', 80)}`;
     const configured = () => !!E('DOOR_IP', '');
@@ -72,15 +72,21 @@ module.exports = ({ app, broadcast, notify }) => {
 
     // Kirim konfigurasi + daftar UID ke ESP8266 (dipicu bila versi di ESP berbeda dengan server)
     async function sync() {
-        if (syncing || !online) return;
+        if (syncing || !online) return false;
         syncing = true; lastSync = Date.now();
+        let ok = false;
         try {
             const body = [`V=${db.ver}`, `S=${db.openSec}`, `E=${db.enabled ? 1 : 0}`, ...db.cards.map(c => `C=${c.uid}`)].join('\n') + '\n';
             const j = await call('/api/sync', 'POST', body);
-            if (raw && j.ver !== undefined) raw.ver = j.ver;
-        } catch { } finally { syncing = false; push(); }
+            if (j.ver !== db.ver) throw new Error('Versi konfigurasi tidak cocok');
+            if (raw) raw.ver = j.ver;
+            ok = true;
+        } catch (e) {
+            console.error('[Pintu] Gagal menyinkronkan konfigurasi:', e.message);
+        } finally { syncing = false; push(); }
+        return ok;
     }
-    const bump = () => { db.ver++; save(); sync(); };
+    const bump = () => { db.ver++; save(); return sync(); };
 
     function handle(e) {
         const uid = normUid(e.uid);
@@ -100,16 +106,31 @@ module.exports = ({ app, broadcast, notify }) => {
             case 'enroll': {
                 enrollUntil = 0;
                 if (!uid) break;
-                if (db.cards.some(c => c.uid === uid)) { log('info', 'dup', { name: nameOf(uid) }); toast('dupToast', { name: nameOf(uid) }, 'warn'); break; }
+                if (db.cards.some(c => c.uid === uid)) {
+                    pendingCardName = '';
+                    if (pendingTelegramEnroll) notify(`⚠️ Kartu ${uid} sudah terdaftar sebagai "${nameOf(uid)}".`);
+                    pendingTelegramEnroll = false;
+                    log('info', 'dup', { name: nameOf(uid) }); toast('dupToast', { name: nameOf(uid) }, 'warn'); break;
+                }
                 let n = 1; while (db.cards.some(c => c.name === T('door.cardName', { n }))) n++;
-                db.cards.push({ uid, name: T('door.cardName', { n }), added: Date.now(), last: null });
-                log('info', 'added', { name: T('door.cardName', { n }), uid });
-                toast('addedToast', { name: T('door.cardName', { n }) });
+                const name = pendingCardName || T('door.cardName', { n });
+                const fromTelegram = pendingTelegramEnroll;
+                pendingCardName = ''; pendingTelegramEnroll = false;
+                db.cards.push({ uid, name, added: Date.now(), last: null });
+                log('info', 'added', { name, uid });
+                toast('addedToast', { name });
+                if (fromTelegram) notify(`✅ Kartu "${name}" (${uid}) berhasil ditambahkan.`);
                 bump();
                 break;
             }
-            case 'enroll_dup': enrollUntil = 0; log('info', 'dup', { name: nameOf(uid) }); toast('dupToast', { name: nameOf(uid) }, 'warn'); break;
-            case 'enroll_timeout': enrollUntil = 0; log('info', 'enrollTimeout'); toast('timeoutToast', {}, 'warn'); break;
+            case 'enroll_dup':
+                enrollUntil = 0; pendingCardName = '';
+                if (pendingTelegramEnroll) notify(`⚠️ Kartu ${uid} sudah terdaftar sebagai "${nameOf(uid)}".`);
+                pendingTelegramEnroll = false; log('info', 'dup', { name: nameOf(uid) }); toast('dupToast', { name: nameOf(uid) }, 'warn'); break;
+            case 'enroll_timeout':
+                enrollUntil = 0; pendingCardName = '';
+                if (pendingTelegramEnroll) notify('⌛ Waktu tambah kartu habis. Kirim /addcard untuk mencoba lagi.');
+                pendingTelegramEnroll = false; log('info', 'enrollTimeout'); toast('timeoutToast', {}, 'warn'); break;
         }
     }
 
@@ -148,27 +169,63 @@ module.exports = ({ app, broadcast, notify }) => {
     const needOnline = (res) => online ? true : (fail(res, 502, T('door.offline')), false);
     const esp = (res, fn) => fn().catch(e => fail(res, 502, T('door.noResp', { e: e.message })));
 
+    async function setEnabled(enabled) {
+        db.enabled = !!enabled;
+        log(db.enabled ? 'info' : 'warn', db.enabled ? 'lockOn' : 'lockOff');
+        const synced = await bump();
+        push();
+        return { enabled: db.enabled, synced };
+    }
+
+    async function open() {
+        if (!online) throw new Error(T('door.offline'));
+        await call(`/api/open?sec=${db.openSec}`, 'POST');
+        log('remote', 'remoteOpen');
+        push();
+    }
+
+    async function close() {
+        if (!online) throw new Error(T('door.offline'));
+        await call('/api/close', 'POST');
+        log('remote', 'remoteClose');
+        push();
+    }
+
+    async function enroll(name = '', fromTelegram = false) {
+        if (!online) throw new Error(T('door.offline'));
+        const cardName = cleanText(name);
+        if (name && !cardName) throw new Error(T('door.nameEmpty'));
+        if (cardName && db.cards.some(c => c.name.toLowerCase() === cardName.toLowerCase())) throw new Error(T('door.nameUsed'));
+        const sec = N('DOOR_ENROLL_SECONDS', 30);
+        await call(`/api/enroll?sec=${sec}`, 'POST');
+        pendingCardName = cardName; pendingTelegramEnroll = fromTelegram;
+        enrollStart = Date.now(); enrollUntil = enrollStart + sec * 1000;
+        log('info', 'enrollStart', { sec });
+        push();
+    }
+
+    async function cancelEnroll() {
+        if (!online) throw new Error(T('door.offline'));
+        await call('/api/enroll?sec=0', 'POST');
+        pendingCardName = ''; pendingTelegramEnroll = false; enrollStart = Date.now(); enrollUntil = 0;
+        push();
+    }
+
     app.get('/api/door/status', (req, res) => res.json(snapshot()));
 
     app.post('/api/door/open', (req, res) => {
         if (!needOnline(res)) return;
-        esp(res, async () => {
-            await call(`/api/open?sec=${db.openSec}`, 'POST');
-            log('remote', 'remoteOpen');
-            push(); res.json({ success: true });
-        });
+        esp(res, async () => { await open(); res.json({ success: true }); });
     });
 
     app.post('/api/door/close', (req, res) => {
         if (!needOnline(res)) return;
-        esp(res, async () => { await call('/api/close', 'POST'); log('remote', 'remoteClose'); push(); res.json({ success: true }); });
+        esp(res, async () => { await close(); res.json({ success: true }); });
     });
 
-    app.post('/api/door/lock', (req, res) => {
-        db.enabled = !!(req.body || {}).enabled;
-        log(db.enabled ? 'info' : 'warn', db.enabled ? 'lockOn' : 'lockOff');
-        bump(); push();
-        res.json({ success: true, enabled: db.enabled, message: db.enabled ? T('door.lockOnMsg') : T('door.lockOffMsg') });
+    app.post('/api/door/lock', async (req, res) => {
+        const state = await setEnabled(!!(req.body || {}).enabled);
+        res.json({ success: true, ...state, message: state.enabled ? T('door.lockOnMsg') : T('door.lockOffMsg') });
     });
 
     app.post('/api/door/config', (req, res) => {
@@ -183,12 +240,10 @@ module.exports = ({ app, broadcast, notify }) => {
     app.post('/api/door/enroll', (req, res) => {
         const cancel = (req.body || {}).action === 'cancel';
         if (!needOnline(res)) return;
-        const sec = N('DOOR_ENROLL_SECONDS', 30);
         esp(res, async () => {
-            await call(`/api/enroll?sec=${cancel ? 0 : sec}`, 'POST');
-            enrollStart = Date.now(); enrollUntil = cancel ? 0 : enrollStart + sec * 1000;
-            if (!cancel) log('info', 'enrollStart', { sec });
-            push(); res.json({ success: true });
+            if (cancel) await cancelEnroll();
+            else await enroll();
+            res.json({ success: true });
         });
     });
 
@@ -214,6 +269,11 @@ module.exports = ({ app, broadcast, notify }) => {
 
     return {
         snapshot,
+        setEnabled,
+        open,
+        close,
+        enroll,
+        cancelEnroll,
         start() {
             if (!configured()) { console.log('[Pintu] DOOR_IP belum diisi di .env (modul pintu dinonaktifkan)'); return; }
             poll();
