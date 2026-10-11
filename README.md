@@ -28,7 +28,7 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Dukungan multi-bahasa
 * Penyimpanan konfigurasi kalibrasi
 * Sistem migrasi storage dari penyimpanan lama ke storage eksternal
-* penambahan DHT11 
+* Penambahan DHT11
 
 ### Flash disk
 
@@ -192,6 +192,10 @@ TELEGRAM_ALERTS=true
 TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 ```
+
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses semua kartu sampai diaktifkan kembali; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+
+Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 
 ## Monitoring
 

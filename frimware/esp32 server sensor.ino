@@ -235,7 +235,6 @@ void hData() {
   n += snprintf(b + n, sizeof(b) - n, "],\"current\":{\"pin\":%d,\"irms\":%.4f,\"ipk\":%.3f,\"mean_mv\":%.1f,\"clip\":%d,\"n\":%u},\"relays\":",
                 PIN_ACS, a.irms, a.ipk, a.mean, a.clip, (unsigned)a.n);
   n += relaysJson(b + n, sizeof(b) - n);
-
   portENTER_CRITICAL(&mux); DhtData d = dht; portEXIT_CRITICAL(&mux);
   bool dOk = d.have && (millis() - d.okMs) < DHT_STALE_MS;
   char tb[12] = "null", hb[12] = "null";          // JSON tidak boleh berisi NaN -> null bila tidak terbaca
