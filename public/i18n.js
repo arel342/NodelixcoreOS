@@ -40,6 +40,9 @@
             'mon.ok': 'Berhasil', 'mon.allOffMsg': 'Semua relay akan dimatikan.', 'mon.allOffTitle': 'Matikan semua relay?',
             'mon.allOffOk': 'Matikan', 'mon.calResetMsg': 'Semua faktor koreksi kembali ke nilai awal.',
             'mon.calResetTitle': 'Reset kalibrasi?', 'mon.calResetOk': 'Reset', 'mon.on': 'ON', 'mon.off': 'OFF',
+            'mon.dht': 'Suhu & kelembapan (DHT11)', 'mon.temp': 'Suhu', 'mon.hum': 'Kelembapan',
+            'mon.dhtOk': 'Sensor OK', 'mon.dhtErr': 'Sensor tidak terbaca', 'mon.dhtOld': 'Firmware belum mendukung DHT11',
+            'mon.dhtFail': 'gagal baca {n}×', 'mon.aux': 'Pendamping Relay 1 & 2',
 
             'bat.normal': 'Normal', 'bat.high': 'Tegangan berlebih', 'bat.crit': 'Kritis', 'bat.low': 'Rendah', 'bat.full': 'Penuh',
             'esp.alert.crit': 'Sel baterai KRITIS {v} V. Matikan beban!', 'esp.alert.low': 'Baterai rendah, sel terendah {v} V',
@@ -178,6 +181,9 @@
             'mon.ok': 'Success', 'mon.allOffMsg': 'All relays will be turned off.', 'mon.allOffTitle': 'Turn off all relays?',
             'mon.allOffOk': 'Turn off', 'mon.calResetMsg': 'All correction factors return to defaults.',
             'mon.calResetTitle': 'Reset calibration?', 'mon.calResetOk': 'Reset', 'mon.on': 'ON', 'mon.off': 'OFF',
+            'mon.dht': 'Temperature & humidity (DHT11)', 'mon.temp': 'Temperature', 'mon.hum': 'Humidity',
+            'mon.dhtOk': 'Sensor OK', 'mon.dhtErr': 'Sensor not reading', 'mon.dhtOld': 'Firmware does not support DHT11 yet',
+            'mon.dhtFail': '{n} read errors', 'mon.aux': 'Relay 1 & 2 companion',
 
             'bat.normal': 'Normal', 'bat.high': 'Overvoltage', 'bat.crit': 'Critical', 'bat.low': 'Low', 'bat.full': 'Full',
             'esp.alert.crit': 'Battery cell CRITICAL {v} V. Turn off the load!', 'esp.alert.low': 'Battery low, lowest cell {v} V',
@@ -316,6 +322,9 @@
             'mon.ok': '成功', 'mon.allOffMsg': '所有继电器将被关闭。', 'mon.allOffTitle': '关闭所有继电器？',
             'mon.allOffOk': '关闭', 'mon.calResetMsg': '所有修正系数将恢复为默认值。',
             'mon.calResetTitle': '重置校准？', 'mon.calResetOk': '重置', 'mon.on': '开', 'mon.off': '关',
+            'mon.dht': '温度与湿度 (DHT11)', 'mon.temp': '温度', 'mon.hum': '湿度',
+            'mon.dhtOk': '传感器正常', 'mon.dhtErr': '传感器无读数', 'mon.dhtOld': '固件尚不支持 DHT11',
+            'mon.dhtFail': '读取失败 {n} 次', 'mon.aux': '继电器 1 & 2 配套输出',
 
             'bat.normal': '正常', 'bat.high': '电压过高', 'bat.crit': '严重', 'bat.low': '偏低', 'bat.full': '已满',
             'esp.alert.crit': '电池电芯严重过低 {v} V，请关闭负载！', 'esp.alert.low': '电池电量低，最低电芯 {v} V',

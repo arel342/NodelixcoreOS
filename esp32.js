@@ -111,6 +111,15 @@ module.exports = ({ app, broadcast, notify }) => {
         chk('clip', c.current.clip, 'clip', {}, 'crit');
     }
 
+    // ---------- DHT11 (suhu & kelembapan) ----------
+    // Firmware lama belum mengirim "dht" -> null (web menampilkan petunjuk, bukan error).
+    function dhtOf(j) {
+        const d = j && j.dht;
+        if (!d) return null;
+        const ok = !!d.ok && Number.isFinite(d.t) && Number.isFinite(d.h);
+        return { ok, t: ok ? d.t : null, h: ok ? d.h : null, pin: d.pin, age: d.age, err: d.err };
+    }
+
     // ---------- Snapshot untuk dashboard ----------
     function snapshot() {
         const c = compute() || {};
@@ -119,7 +128,8 @@ module.exports = ({ app, broadcast, notify }) => {
             esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap },
             battery: c.battery || null,
             current: c.current || null,
-            environment: raw && raw.environment || null,
+            dht: dhtOf(raw),
+            aux: (raw && raw.aux) || null,   // GPIO pendamping Relay 1 & 2 (GPIO 12 = ON, GPIO 13 = OFF)
             relays: (raw ? raw.relays : []).map((r, i) => ({ ...r, name: labels[i] || r.name })),
             alerts: Object.entries(act).map(([key, a]) => ({ key, ...a })),
             cal, zeroing: !!zeroing,
@@ -144,7 +154,8 @@ module.exports = ({ app, broadcast, notify }) => {
         }
         const c = compute();
         if (c) {
-            hist.push({ t: Date.now(), v: c.battery ? c.battery.pack : null, i: c.current.a });
+            const d = dhtOf(j);
+            hist.push({ t: Date.now(), v: c.battery ? c.battery.pack : null, i: c.current.a, tc: d ? d.t : null, h: d ? d.h : null });
             if (hist.length > 300) hist.shift();
             evaluate(c);
         }

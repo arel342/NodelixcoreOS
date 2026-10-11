@@ -52,6 +52,15 @@
 .rl[aria-pressed=true] .sw{background:var(--amber)}
 .rl[aria-pressed=true] .sw::after{transform:translateX(22px)}
 
+/* Kartu DHT11 (kartu putih: chip memakai warna gelap agar terbaca) */
+.dht{display:grid;gap:14px}
+@media(min-width:720px){.dht{grid-template-columns:1fr 1fr}}
+#m-dht .chip{background:#eef2f9;color:var(--ink)}
+#m-dht .chip.ok{background:#e1f6ec;color:#067a52}
+#m-dht .chip.warn{background:#fff3d6;color:#8a5a00}
+#m-dht .chip.bad{background:#fde4e4;color:#b42318}
+#m-dht .big{margin:6px 0 4px}
+
 .alerts{list-style:none;margin:10px 0 0;padding:0;display:grid;gap:6px}
 .alerts li{padding:9px 12px;border-radius:10px;background:#fff3d6;border-left:4px solid var(--amber)}
 .alerts li.crit{background:#fde4e4;border-color:var(--bad)}

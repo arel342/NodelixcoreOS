@@ -114,7 +114,7 @@
                     <div class="text-white text-2xl flex items-center">
                         <i class="fa-solid fa-cubes"></i>
                     </div>
-                    <span class="text-xl font-bold tracking-wider text-white">logoipsum<sup>®</sup></span>
+                    <span class="text-xl font-bold tracking-wider text-white">NodelixcoreOS</span>
                 </div>
 
                 <nav class="space-y-2">
@@ -291,7 +291,25 @@
                         <div class="card">
                             <div class="head"><span class="mut" data-i18n="mon.relays">Kontrol relay</span><button class="lnk" onclick="relayAllOff()" data-i18n="mon.allOff">Matikan semua</button></div>
                             <div id="m-relays" class="rls"></div>
+                            <p id="m-aux" class="mut note"></p>
                         </div>
+                    </div>
+
+                    <div id="m-dht" class="card">
+                        <div class="head"><span class="mut" data-i18n="mon.dht">Suhu &amp; kelembapan (DHT11)</span><span id="m-dht-chip" class="chip">–</span></div>
+                        <div class="dht">
+                            <div>
+                                <div class="mut" data-i18n="mon.temp">Suhu</div>
+                                <div class="num big"><span id="m-temp">--</span><small>°C</small></div>
+                                <svg id="m-tv" class="spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
+                            </div>
+                            <div>
+                                <div class="mut" data-i18n="mon.hum">Kelembapan</div>
+                                <div class="num big"><span id="m-hum">--</span><small>%</small></div>
+                                <svg id="m-hv" class="spark" viewBox="0 0 300 56" preserveAspectRatio="none"></svg>
+                            </div>
+                        </div>
+                        <p id="m-dht-meta" class="mut note"></p>
                     </div>
 
                     <div class="card"><div class="mut" data-i18n="mon.alerts">Peringatan</div><ul id="m-alerts" class="alerts"></ul></div>

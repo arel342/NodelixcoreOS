@@ -28,6 +28,7 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Dukungan multi-bahasa
 * Penyimpanan konfigurasi kalibrasi
 * Sistem migrasi storage dari penyimpanan lama ke storage eksternal
+* Penambahan DHT11
 
 ### Flash disk
 
@@ -194,7 +195,7 @@ TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 
 `TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses semua kartu sampai diaktifkan kembali; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
-Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ); pasang library **DHT sensor library** oleh Adafruit beserta **Adafruit Unified Sensor** pada Arduino IDE dan unggah ulang firmware ESP32 agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
+Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 
 ## Monitoring
 
@@ -246,7 +247,7 @@ Pastikan storage tujuan tersedia dan dapat ditulis sebelum melakukan migrasi.
 Ambil perubahan terbaru:
 
 ```bash
-git pull
+git pull origin main
 ```
 
 Jika dependency berubah:
@@ -259,17 +260,6 @@ Kemudian:
 
 ```bash
 npm start
-```
-
-## Update ke GitHub
-
-Setelah melakukan perubahan:
-
-```bash
-git status
-git add .
-git commit -m "Update server"
-git push
 ```
 
 ## Keamanan
@@ -301,12 +291,6 @@ package.json
 package-lock.json
 ```
 
-Install dengan:
-
-```bash
-npm install
-```
-
 ## Lisensi
 
 Project ini menggunakan lisensi yang ditentukan pada `package.json`.
@@ -325,7 +309,7 @@ Project `NodelixcoreOS` dikembangkan sebagai server lokal/IoT berbasis Node.js u
 
 ## Skema Pemasangan Pin (Pinout Wiring)
 
-Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhubung ke sistem Server8:
+Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhubung ke sistem :
 
 ## 1. ESP8266 (Door Lock RFID & LCD)
 
@@ -363,3 +347,5 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
   * Relay 1 & 2 (Paralel) ➔ `GPIO 26`
   * Relay 3 ➔ `GPIO 27`
   * Relay 4 ➔ `GPIO 32`
+* **module DHT11**:
+  *DHT11 ➔ 'GPIO 4'

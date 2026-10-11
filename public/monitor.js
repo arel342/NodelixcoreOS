@@ -40,7 +40,7 @@ function renderMonitor(s) {
     mon.snap = s;
     if (s.history) mon.hist = s.history;
     else if (s.online && s.current) {
-        mon.hist.push({ v: s.battery ? s.battery.pack : null, i: s.current.a });
+        mon.hist.push({ v: s.battery ? s.battery.pack : null, i: s.current.a, tc: s.dht ? s.dht.t : null, h: s.dht ? s.dht.h : null });
         if (mon.hist.length > 300) mon.hist.shift();
     }
 
@@ -90,6 +90,24 @@ function renderMonitor(s) {
         el.querySelector('small').textContent = `GPIO ${r.pin} · ${r.on ? t('mon.on') : t('mon.off')}`;
         el.disabled = !s.online;
     });
+    // Keluaran pendamping Relay 1 & 2: GPIO 12 = ON, GPIO 13 = OFF (selalu berlawanan)
+    const ax = s.aux;
+    $m('m-aux').textContent = ax
+        ? `${t('mon.aux')}: GPIO ${ax.on_pin} ${ax.on ? t('mon.on') : t('mon.off')} · GPIO ${ax.off_pin} ${ax.off ? t('mon.on') : t('mon.off')}`
+        : '';
+
+    // DHT11: suhu & kelembapan
+    const dh = s.online ? s.dht : null, dok = !!(dh && dh.ok);
+    $m('m-temp').textContent = dok ? fx(dh.t, 1) : '--';
+    $m('m-hum').textContent = dok ? fx(dh.h, 0) : '--';
+    const dchip = $m('m-dht-chip');
+    if (!s.online || !s.esp) { dchip.textContent = '–'; dchip.className = 'chip'; }
+    else if (!s.dht) { dchip.textContent = t('mon.dhtOld'); dchip.className = 'chip warn'; }   // firmware lama
+    else if (s.dht.ok) { dchip.textContent = t('mon.dhtOk'); dchip.className = 'chip ok'; }
+    else { dchip.textContent = t('mon.dhtErr'); dchip.className = 'chip bad'; }
+    $m('m-dht-meta').textContent = s.dht ? `GPIO ${s.dht.pin}` + (s.dht.err ? ' · ' + t('mon.dhtFail', { n: s.dht.err }) : '') : '';
+    spark('m-tv', mon.hist.map(h => h.tc).filter(v => v != null), '#ef6c3a');
+    spark('m-hv', mon.hist.map(h => h.h).filter(v => v != null), '#2f78be');
 
     // Peringatan
     $m('m-alerts').innerHTML = s.alerts.length

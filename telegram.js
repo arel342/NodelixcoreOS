@@ -47,11 +47,11 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
     }
 
     function dhtText() {
-        const s = esp32.snapshot(), d = s.environment;
+        const s = esp32.snapshot(), d = s.dht;
         if (!s.online) return '⚠️ ESP32 sedang offline.';
-        if (!d || !d.valid || !Number.isFinite(d.temperature) || !Number.isFinite(d.humidity))
+        if (!d || !d.ok || !Number.isFinite(d.t) || !Number.isFinite(d.h))
             return '🌡️ Data DHT11 belum tersedia. Periksa sensor, kabel GPIO 4, dan firmware ESP32.';
-        return `🌡️ Suhu ${d.temperature.toFixed(1)} °C · kelembapan ${d.humidity.toFixed(0)}%`;
+        return `🌡️ Suhu ${d.t.toFixed(1)} °C · kelembapan ${d.h.toFixed(0)}%`;
     }
 
     function statusText() {
@@ -59,12 +59,13 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
         const relays = e.relays.length
             ? e.relays.map(r => `R${r.id} ${r.name}: ${r.on ? 'ON' : 'OFF'}`).join('\n')
             : 'Belum ada data relay.';
+        const aux = e.aux ? `\nKeluaran pendamping GPIO ${e.aux.on_pin}/${e.aux.off_pin}: ${e.aux.on ? 'ON' : 'OFF'}/${e.aux.off ? 'ON' : 'OFF'}` : '';
         return [
             '📊 Status NodelixcoreOS',
             `📡 ESP32: ${e.online ? 'online' : 'offline'}`,
             batteryText(),
             dhtText(),
-            '🔌 Relay:\n' + relays,
+            '🔌 Relay:\n' + relays + aux,
             `🚪 Pintu: ${d.online ? 'online' : 'offline'} · lock kartu ${d.enabled ? 'aktif' : 'nonaktif'} (${d.synced ? 'sinkron' : 'belum sinkron'}) · pintu ${d.open ? 'terbuka' : 'terkunci'}`,
             `🌐 Web: ${isWebEnabled() ? 'aktif' : 'mati'}`
         ].join('\n');
