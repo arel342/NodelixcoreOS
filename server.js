@@ -81,7 +81,7 @@ app.use(express.json());
 // Bahasa aktif boleh dibaca sebelum login (halaman login ikut bahasa tersimpan)
 app.get('/api/settings/lang', (req, res) => res.json({ lang: env('LANGUAGE', 'id') }));
 // Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
+app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
 
 // Ganti bahasa web (disimpan ke .env, berlaku untuk semua tulisan termasuk pesan server)
 app.post('/api/settings/lang', (req, res) => {
@@ -185,6 +185,8 @@ const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword
     fails.delete(req.ip);
     return true;
 } });
+// ================= UPDATE FIRMWARE ESP (file .bin -> ESP8266 / ESP32) =================
+const firmware = require('./firmware')({ app, broadcast, notify, esp32, door });
 // ================= MONITOR SISTEM (CPU/RAM/flash disk) =================
 const system = require('./system')({ app, broadcast });
 // ================= TERMINAL COMMAND (Pengaturan > Terminal) =================

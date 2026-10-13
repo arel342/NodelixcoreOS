@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const T = require('./lang');
+const fwstate = require('./fwstate');   // penanda sedang update firmware (alarm offline ditahan)
 
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const N = (k, d) => { const v = parseFloat(process.env[k]); return Number.isFinite(v) ? v : d; };
@@ -52,7 +53,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     const snapshot = () => {
         const left = enrollUntil ? Math.max(0, Math.ceil((enrollUntil - Date.now()) / 1000)) : 0;
         return {
-            configured: configured(), online, lastOk, fails,
+            configured: configured(), online, lastOk, fails, updating: fwstate.isBusy('esp8266'),
             esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw },
             open: !!(raw && raw.open), left: raw ? raw.left : 0,
             enabled: db.enabled, openSec: db.openSec, synced: !!(raw && raw.ver === db.ver),
@@ -139,7 +140,8 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         raw = j; fails = 0; lastOk = Date.now();
         if (!online) {
             online = true;
-            if (everOnline) { log('info', 'backOnline'); tg(T('door.tgOn'), 'door_on', 0); }
+            // Saat OTA, ESP memang berhenti menjawab sejenak -> jangan kirim pesan "kembali online"
+            if (everOnline && !fwstate.isBusy('esp8266')) { log('info', 'backOnline'); tg(T('door.tgOn'), 'door_on', 0); }
             everOnline = true;
         }
         if (j.boot !== boot) { boot = j.boot; cursor = 0; }                     // ESP restart: nomor event mulai lagi dari 1
@@ -158,7 +160,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
             if (fails >= 3 && online) {
                 online = false; enrollUntil = 0;
                 log('bad', 'offline');
-                tg(T('door.tgOff', { e: e.message }), 'door_off', 300000);
+                if (!fwstate.isBusy('esp8266')) tg(T('door.tgOff', { e: e.message }), 'door_off', 300000);   // saat OTA wajar tidak menjawab
             }
             push();
         }

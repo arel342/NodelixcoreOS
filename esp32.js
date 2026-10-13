@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const T = require('./lang');
+const fwstate = require('./fwstate');   // penanda sedang update firmware (alarm offline ditahan)
 
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const N = (k, d) => { const v = parseFloat(process.env[k]); return Number.isFinite(v) ? v : d; };
@@ -124,7 +125,7 @@ module.exports = ({ app, broadcast, notify }) => {
     function snapshot() {
         const c = compute() || {};
         return {
-            online, lastOk, fails,
+            online, lastOk, fails, updating: fwstate.isBusy('esp32'),
             esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap },
             battery: c.battery || null,
             current: c.current || null,
@@ -142,7 +143,8 @@ module.exports = ({ app, broadcast, notify }) => {
         raw = j; fails = 0; lastOk = Date.now();
         if (!online) {
             online = true;
-            if (everOnline) note(T('esp.tgBack'), 'online');
+            // Saat OTA, ESP memang berhenti menjawab sejenak -> jangan kirim pesan "kembali online"
+            if (everOnline && !fwstate.isBusy('esp32')) note(T('esp.tgBack'), 'online');
             everOnline = true;
         }
         if (zeroing) {   // kalibrasi nol: abaikan 5 pembacaan awal (filter masih menyesuaikan), rata-ratakan 5 berikutnya
@@ -166,7 +168,10 @@ module.exports = ({ app, broadcast, notify }) => {
         try { ingest(await call('/api/data')); }
         catch (e) {
             fails++;
-            if (fails >= N('ESP32_OFFLINE_AFTER', 3) && online) { online = false; note(T('esp.tgOff', { e: e.message }), 'offline'); }
+            if (fails >= N('ESP32_OFFLINE_AFTER', 3) && online) {
+                online = false;
+                if (!fwstate.isBusy('esp32')) note(T('esp.tgOff', { e: e.message }), 'offline');   // saat OTA wajar tidak menjawab
+            }
             push();
         }
         timer = setTimeout(poll, N('ESP32_POLL_MS', 1000));

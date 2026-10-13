@@ -21,6 +21,7 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Terminal perintah melalui web (dapat dimatikan di Pengaturan)
 * Integrasi ESP32
 * Integrasi ESP8266/ESP lock door
+* Update firmware ESP8266 & ESP32 lewat file `.bin` (OTA dari web atau menu Termux)
 * WebSocket untuk komunikasi real-time
 * Sistem notifikasi
 * Integrasi Telegram
@@ -52,11 +53,14 @@ server8/
 ├── server.js
 ├── esp32.js
 ├── door.js
+├── firmware.js
+├── fwstate.js
 ├── storage.js
 ├── system.js
 ├── terminal.js
 ├── lang.js
 ├── migrate.js
+├── update-fw.js
 ├── package.json
 ├── package-lock.json
 ├── .env.example
@@ -69,6 +73,7 @@ server8/
     ├── monitor.js
     ├── monitor.css
     ├── door.js
+    ├── firmware.js
     ├── system.js
     ├── terminal.js
     ├── upload.js
@@ -232,6 +237,58 @@ Terminal tersedia di tab **Pengaturan** untuk menjalankan perintah pada perangka
 
 Terminal memberikan akses menjalankan perintah pada perangkat server. Gunakan hanya pada jaringan tepercaya, lindungi akun administrator, dan matikan fitur ini jika tidak diperlukan.
 
+## Update Firmware ESP (OTA)
+
+Firmware ESP8266 (pintu) dan ESP32 (monitor) bisa diperbarui dari jarak jauh memakai file `.bin`
+hasil kompilasi Arduino — tanpa mencabut perangkat dan tanpa kabel USB.
+
+Dari web (**menu Update Firmware**):
+
+1. Pilih perangkat: **ESP8266 (pintu RFID)** atau **ESP32 (monitor PLTS)**.
+2. Ketuk **Pilih file .bin** lalu pilih file firmware (mis. `esp32 server sensor.ino.bin`).
+3. Tekan **Update firmware**. Progres muncul: unggah ke server, kirim ke ESP, lalu ESP restart.
+   Setelah selesai, versi firmware baru langsung tampil di kartu perangkat.
+
+Kalau file yang dipilih **bukan `.bin`**, web langsung menampilkan peringatan dan minta konfirmasi;
+server juga menolak file yang isinya bukan gambar firmware ESP (header `0xE9` tidak ditemukan).
+Peringatan Telegram dikirim otomatis saat update berhasil atau gagal.
+
+Dari Termux (menu teks, tanpa web):
+
+```bash
+npm run update-fw
+# atau
+node update-fw.js
+```
+
+Menu menampilkan pilihan perangkat, lalu meminta path file `.bin` (bisa juga mengarah ke folder
+Download supaya file `.bin` di dalamnya bisa dipilih dengan nomor). Mode langsung:
+
+```bash
+node update-fw.js esp8266 ~/storage/downloads/esp8266.bin
+node update-fw.js esp32 ~/storage/downloads/esp32.bin
+```
+
+Syarat & catatan:
+
+* Firmware di perangkat harus **versi 1.2 ke atas** (sudah ada di repo ini) karena rute OTA
+  `POST /api/ota` baru ditambahkan di versi tersebut. ESP lama perlu di-flash sekali lewat USB.
+* ESP8266: pakai skema flash yang punya partisi OTA, mis. `4MB (FS:2MB OTA:~1019KB)`.
+* ESP32: pakai skema partisi dengan OTA, mis. `Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)`.
+  Skema bawaan `Default 4MB with spiffs` tidak punya partisi OTA, jadi update akan ditolak.
+* Perangkat harus bisa dihubungi server (`DOOR_IP` / `ESP32_IP` dan kunci API benar di `.env`).
+* Jangan putuskan daya saat proses berjalan. Kalau gagal, ESP tetap memakai firmware lama.
+* Selama OTA, alarm Telegram "perangkat offline" dan "kembali online" ditahan karena perangkat
+  memang berhenti menjawab sejenak.
+
+Pengaturan di `.env`:
+
+```env
+OTA_MAX_MB=4
+OTA_TIMEOUT_S=240
+OTA_WAIT_S=60
+```
+
 ## Migrasi Storage
 
 Jika diperlukan:
@@ -354,4 +411,4 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
 
 Di tab **Pintu RFID / Lock Door**, tekan menu **⋮** pada kartu terdaftar untuk mengubah nama, menghapus kartu, atau memilih **Jadikan kartu admin**. Penetapan admin memerlukan password login dashboard saat ini (diverifikasi di server). Kartu admin tetap bisa membuka pintu ketika lock door dimatikan. **Hapus admin** hanya mencabut hak admin, tidak menghapus kartu dari daftar.
 
-**Wajib unggah ulang `frimware/esp8266 lock door.ino` (versi 1.1)** agar ESP8266 mengenali kartu admin. Status admin disimpan di server dan disinkronkan ke LittleFS ESP8266, sehingga tetap berlaku saat server offline atau ESP restart setelah sinkronisasi. Perubahan saat perangkat offline baru berlaku di pintu setelah sinkronisasi berhasil. Kartu lama otomatis tetap menjadi kartu biasa.
+**Wajib unggah ulang `frimware/esp8266 lock door.ino` (versi 1.1 ke atas)** agar ESP8266 mengenali kartu admin. Status admin disimpan di server dan disinkronkan ke LittleFS ESP8266, sehingga tetap berlaku saat server offline atau ESP restart setelah sinkronisasi. Perubahan saat perangkat offline baru berlaku di pintu setelah sinkronisasi berhasil. Kartu lama otomatis tetap menjadi kartu biasa.

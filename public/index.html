@@ -138,6 +138,10 @@
                         <i class="fa-solid fa-microchip text-lg"></i>
                         <span data-i18n="nav.system">Sistem</span>
                     </button>
+                    <button onclick="switchTab('firmware')" id="nav-firmware" class="sidebar-item w-full flex items-center gap-4 px-4 py-3 rounded-xl text-sm font-medium hover:bg-white/10 transition-all">
+                        <i class="fa-solid fa-cloud-arrow-up text-lg"></i>
+                        <span data-i18n="nav.fw">Update Firmware</span>
+                    </button>
                     <button onclick="switchTab('settings')" id="nav-settings" class="sidebar-item w-full flex items-center gap-4 px-4 py-3 rounded-xl text-sm font-medium hover:bg-white/10 transition-all">
                         <i class="fa-solid fa-gear text-lg"></i>
                         <span data-i18n="nav.settings">Pengaturan</span>
@@ -458,6 +462,52 @@
                 </div>
             </section>
 
+            <!-- TAB: UPDATE FIRMWARE ESP (file .bin -> ESP8266 / ESP32) -->
+            <section id="view-firmware" class="hidden p-4 sm:p-6">
+                <div class="mon">
+                    <div class="mon-bar"><b data-i18n="fw.title">Update firmware ESP</b></div>
+                    <p class="dr-hint" data-i18n="fw.desc">Perbarui firmware ESP lewat jaringan memakai file .bin.</p>
+
+                    <div class="card">
+                        <div class="mut" data-i18n="fw.devTitle">Pilih perangkat</div>
+                        <p class="dr-hint" data-i18n="fw.devDesc">Pilih ESP yang mau diupdate.</p>
+                        <div id="fw-devs" class="fw-devs"></div>
+                    </div>
+
+                    <div class="card">
+                        <div class="head"><span class="mut" data-i18n="fw.fileTitle">File firmware (.bin)</span><span class="dr-sub" id="fw-max"></span></div>
+                        <label class="fw-drop" id="fw-drop" for="fw-file">
+                            <i class="fa-solid fa-file-arrow-up" aria-hidden="true"></i>
+                            <span class="fw-g">
+                                <b data-i18n="fw.dropMain">Pilih file .bin</b>
+                                <span class="dr-sub" data-i18n="fw.dropHint">Ketuk untuk memilih file .bin.</span>
+                            </span>
+                        </label>
+                        <input id="fw-file" type="file" accept=".bin" hidden>
+                        <div id="fw-fileinfo" class="fw-file" hidden></div>
+                        <div id="fw-warn" class="fw-warn" hidden></div>
+                        <div id="fw-bar" class="fw-bar" hidden><i id="fw-fill"></i></div>
+                        <div id="fw-line" class="dr-hint"></div>
+                        <div class="fw-acts">
+                            <button id="fw-start" type="button" class="dr-card-b" onclick="fwStart()" disabled data-i18n="fw.start">Update firmware</button>
+                            <button id="fw-reset" type="button" class="dr-card-b ghost" onclick="fwReset()" data-i18n="fw.reset">Reset pilihan</button>
+                        </div>
+                        <p class="dr-hint" id="fw-last"></p>
+                    </div>
+
+                    <div class="card">
+                        <div class="mut" data-i18n="fw.guideTitle">Cara membuat file .bin</div>
+                        <ol class="fw-steps">
+                            <li data-i18n="fw.g1"></li>
+                            <li data-i18n="fw.g2"></li>
+                            <li data-i18n="fw.g3"></li>
+                            <li data-i18n="fw.g4"></li>
+                        </ol>
+                        <p class="fw-warn"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i> <span data-i18n="fw.warnPower"></span></p>
+                    </div>
+                </div>
+            </section>
+
             <!-- TAB: PENGATURAN -->
             <section id="view-settings" class="hidden p-4 sm:p-6">
                 <div class="mon" style="max-width:640px">
@@ -666,13 +716,14 @@
         function toggleSidebar() { document.getElementById('sidebar').classList.toggle('-translate-x-full'); }
 
         function switchTab(tab) {
-            ['dashboard', 'monitor', 'door', 'storage', 'system', 'settings'].forEach(tb => {
+            ['dashboard', 'monitor', 'door', 'storage', 'system', 'firmware', 'settings'].forEach(tb => {
                 document.getElementById('view-' + tb).classList.toggle('hidden', tb !== tab);
                 document.getElementById('nav-' + tb).classList.toggle('active', tb === tab);
             });
             if (tab === 'door' && window.loadDoor) loadDoor();
             if (tab === 'storage') { loadFileList(); if (window.loadStorageStatus) loadStorageStatus(); }
             if (tab === 'system' && window.loadSystem) loadSystem();
+            if (window.fwOpen && window.fwClose) { tab === 'firmware' ? fwOpen() : fwClose(); }
             if (tab === 'settings' && window.loadTerminal) loadTerminal();
             if (window.innerWidth < 768) document.getElementById('sidebar').classList.add('-translate-x-full');
         }
@@ -694,6 +745,8 @@
                     uiToast(data.k ? t('dnote.' + data.k, data.v) : data.text, data.level);
                 } else if (data.type === 'SYSTEM') {
                     if (window.renderSystem) renderSystem(data.data);
+                } else if (data.type === 'FW') {
+                    if (window.fwEvent) fwEvent(data.data);
                 }
             };
             ws.onclose = () => { if (loggedIn) setTimeout(connectWebSocket, 2000); };
@@ -1258,6 +1311,7 @@
     <script src="door.js"></script>
     <script src="upload.js"></script>
     <script src="system.js"></script>
+    <script src="firmware.js"></script>
     <script src="terminal.js"></script>
 </body>
 </html>

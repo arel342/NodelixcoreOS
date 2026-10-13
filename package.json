@@ -4,8 +4,9 @@
   "description": "",
   "main": "esp32.js",
   "scripts": {
-    "test": "node --check server.js && node --check terminal.js && node --check telegram.js && node --check door.js && node --check esp32.js && node --check storage.js && node --check lang.js && node --check public/terminal.js && node --check public/i18n.js && node --check public/door.js && node --check public/ui.js && node --test tests/door-admin.test.js",
-    "start": "node server.js"
+    "test": "node --check server.js && node --check terminal.js && node --check telegram.js && node --check door.js && node --check esp32.js && node --check storage.js && node --check lang.js && node --check firmware.js && node --check fwstate.js && node --check update-fw.js && node --check public/terminal.js && node --check public/i18n.js && node --check public/door.js && node --check public/ui.js && node --check public/firmware.js && node --test tests/door-admin.test.js tests/firmware.test.js",
+    "start": "node server.js",
+    "update-fw": "node update-fw.js"
   },
   "keywords": [],
   "author": "",

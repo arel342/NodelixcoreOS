@@ -36,7 +36,7 @@ function fixture(saved) {
     };
     const context = {
         module: { exports: {} }, __dirname: root,
-        require: n => n === 'fs' ? fakeFs : n === './lang' ? T : require(n),
+        require: n => n === 'fs' ? fakeFs : n === './lang' ? T : n === './fwstate' ? require('../fwstate') : require(n),
         process: { env: { DOOR_IP: 'device.test' } }, console, AbortSignal,
         setTimeout(fn, ms) { timers.set(++id, { fn, ms }); return id; },
         clearTimeout: i => timers.delete(i),
