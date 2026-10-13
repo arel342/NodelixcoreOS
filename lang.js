@@ -3,6 +3,12 @@
 // ikut berganti bahasa tanpa restart.
 const DICT = {
     id: {
+        'door.adminPasswordWrong': 'Password login dashboard salah.',
+        'door.badAdmin': 'Status admin tidak valid.',
+        'door.adminSaved': 'Status admin kartu disimpan.',
+        'door.adminPending': 'Status admin kartu disimpan di server; menunggu sinkronisasi ke ESP8266. Pastikan firmware kartu admin sudah diunggah.',
+        'dlog.adminAdded': '{name} dijadikan kartu admin',
+        'dlog.adminRemoved': 'Status admin kartu {name} dihapus',
         'auth.notLoggedIn': 'Belum login',
         'auth.tooMany': 'Terlalu banyak percobaan. Coba lagi beberapa menit.',
         'auth.wrong': 'username atau password salah',
@@ -116,7 +122,7 @@ const DICT = {
         'dlog.remoteOpen': 'Pintu dibuka dari server (tanpa kartu)',
         'dlog.remoteClose': 'Pintu dikunci lagi dari server',
         'dlog.lockOn': 'Lock door diaktifkan (kartu bisa membuka pintu)',
-        'dlog.lockOff': 'Lock door dimatikan (kartu tidak membuka pintu)',
+        'dlog.lockOff': 'Lock door dimatikan (hanya kartu admin yang bisa membuka pintu)',
         'dlog.relaySet': 'Waktu relay terbuka diatur {s} detik',
         'dlog.relaySetPulse': 'Waktu relay terbuka diatur {s} detik (pulsa singkat)',
         'dlog.enrollStart': 'Mode tambah kartu dimulai ({sec} detik)',
@@ -131,6 +137,12 @@ const DICT = {
         'door.tgOff': '📴 Modul pintu tidak merespons ({e})'
     },
     en: {
+        'door.adminPasswordWrong': 'Incorrect dashboard login password.',
+        'door.badAdmin': 'Invalid admin status.',
+        'door.adminSaved': 'Card admin status saved.',
+        'door.adminPending': 'Card admin status saved on the server; waiting for ESP8266 synchronization. Make sure admin-card firmware is installed.',
+        'dlog.adminAdded': '{name} made an admin card',
+        'dlog.adminRemoved': 'Admin status removed from {name}',
         'auth.notLoggedIn': 'Not logged in',
         'auth.tooMany': 'Too many attempts. Try again in a few minutes.',
         'auth.wrong': 'Incorrect username or password',
@@ -244,7 +256,7 @@ const DICT = {
         'dlog.remoteOpen': 'Door opened from server (no card)',
         'dlog.remoteClose': 'Door locked again from server',
         'dlog.lockOn': 'Door lock enabled (cards can open the door)',
-        'dlog.lockOff': 'Door lock disabled (cards cannot open the door)',
+        'dlog.lockOff': 'Door lock disabled (only admin cards can open the door)',
         'dlog.relaySet': 'Relay open time set to {s} seconds',
         'dlog.relaySetPulse': 'Relay open time set to {s} seconds (short pulse)',
         'dlog.enrollStart': 'Add-card mode started ({sec} seconds)',
@@ -259,6 +271,12 @@ const DICT = {
         'door.tgOff': '📴 Door module is not responding ({e})'
     },
     zh: {
+        'door.adminPasswordWrong': '仪表板登录密码错误。',
+        'door.badAdmin': '管理员状态无效。',
+        'door.adminSaved': '卡片管理员状态已保存。',
+        'door.adminPending': '管理员状态已保存到服务器，等待同步到 ESP8266。请确保已安装支持管理员卡的固件。',
+        'dlog.adminAdded': '{name} 已设为管理员卡',
+        'dlog.adminRemoved': '已移除 {name} 的管理员权限',
         'auth.notLoggedIn': '未登录',
         'auth.tooMany': '尝试次数过多，请几分钟后再试。',
         'auth.wrong': '用户名或密码错误',
@@ -372,7 +390,7 @@ const DICT = {
         'dlog.remoteOpen': '门已从服务器打开（无卡）',
         'dlog.remoteClose': '门已从服务器重新上锁',
         'dlog.lockOn': '门锁已启用（卡片可以开门）',
-        'dlog.lockOff': '门锁已关闭（卡片无法开门）',
+        'dlog.lockOff': '门锁已停用（仅管理员卡可以开门）',
         'dlog.relaySet': '继电器开门时间设为 {s} 秒',
         'dlog.relaySetPulse': '继电器开门时间设为 {s} 秒（短脉冲）',
         'dlog.enrollStart': '添加卡片模式已开始（{sec} 秒）',

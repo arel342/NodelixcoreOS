@@ -39,7 +39,7 @@ IPAddress IP_ADDR(192, 168, 11, 60), IP_GW(192, 168, 11, 1), IP_MASK(255, 255, 2
 #define LCD_ADDR    0x27    // alamat I2C LCD (0x27 atau 0x3F; otomatis dicoba keduanya)
 
 #define MAX_CARDS    150
-#define FW_VER       "1.0"
+#define FW_VER       "1.1"
 // =======================================================
 
 // ---------- LCD 1602 lewat PCF8574 (mode 4-bit) ----------
@@ -77,7 +77,7 @@ void lcdShow(const String& a, const String& b) {       // hanya menulis baris ya
 MFRC522 rfid(PIN_RC_SS, PIN_RC_RST);
 ESP8266WebServer server(80);
 
-String cards[MAX_CARDS]; int nCards = 0;
+String cards[MAX_CARDS]; bool adminCards[MAX_CARDS] = {}; int nCards = 0;
 long cfgVer = 0; int openSec = 5; bool enabled = true;     // dari server, disimpan di /cfg.txt
 bool relayOn = false; uint32_t relayOffAt = 0;
 bool enrolling = false; uint32_t enrollUntil = 0;
@@ -96,6 +96,7 @@ void pushEv(const char* type, const String& uid) {
 void showMsg(const String& a, const String& b, uint32_t ms) { m1 = a; m2 = b; msgUntil = millis() + ms; }
 bool serverOk() { return lastPoll != 0 && (millis() - lastPoll) < 8000; }
 bool hasCard(const String& u) { for (int i = 0; i < nCards; i++) if (cards[i] == u) return true; return false; }
+bool isAdminCard(const String& u) { for (int i = 0; i < nCards; i++) if (cards[i] == u) return adminCards[i]; return false; }
 int enrollLeft() { if (!enrolling) return 0; int32_t l = (int32_t)(enrollUntil - millis()); return l > 0 ? (l + 999) / 1000 : 0; }
 
 void relaySet(bool on) { relayOn = on; digitalWrite(PIN_RELAY, (on == !RELAY_ACTIVE_LOW) ? HIGH : LOW); }
@@ -107,7 +108,7 @@ void openDoor(int sec) {                                 // 0 detik = pulsa sing
 }
 
 // ---------- Konfigurasi & daftar kartu (LittleFS) ----------
-// Format teks:  V=<versi> / S=<detik relay 0-10> / E=<1 lock door aktif, 0 mati> / C=<UID hex> (satu per baris)
+// Format teks:  V=<versi> / S=<detik relay 0-10> / E=<1 lock door aktif, 0 mati> / C=<UID biasa> / A=<UID admin> (satu per baris)
 bool parseCfg(const String& t) {
   if (t.indexOf("V=") < 0) return false;
   nCards = 0;
@@ -120,14 +121,19 @@ bool parseCfg(const String& t) {
     if (k == 'V') cfgVer = v.toInt();
     else if (k == 'S') openSec = constrain((int)v.toInt(), 0, 10);
     else if (k == 'E') enabled = v.toInt() != 0;
-    else if (k == 'C') { v.toUpperCase(); if (v.length() >= 8 && v.length() <= 20 && nCards < MAX_CARDS) cards[nCards++] = v; }
+    else if (k == 'C' || k == 'A') {
+      v.toUpperCase();
+      if (v.length() >= 8 && v.length() <= 20 && nCards < MAX_CARDS) {
+        cards[nCards] = v; adminCards[nCards] = k == 'A'; nCards++;
+      }
+    }
   }
   return true;
 }
 void saveCfg() {
   File f = LittleFS.open("/cfg.txt", "w"); if (!f) return;
   f.print("V="); f.print(cfgVer); f.print("\nS="); f.print(openSec); f.print("\nE="); f.print(enabled ? 1 : 0); f.print("\n");
-  for (int i = 0; i < nCards; i++) { f.print("C="); f.print(cards[i]); f.print("\n"); }
+  for (int i = 0; i < nCards; i++) { f.print(adminCards[i] ? "A=" : "C="); f.print(cards[i]); f.print("\n"); }
   f.close();
 }
 void loadCfg() {
@@ -159,7 +165,7 @@ void handleCard(const String& uid) {
     return;
   }
   if (!hasCard(uid)) { pushEv("unknown", uid); showMsg("Kartu belum", "di daftar", 2500); return; }
-  if (!enabled)      { pushEv("locked", uid);  showMsg("Selamat datang", "LOCK", 2000); return; }
+  if (!enabled && !isAdminCard(uid)) { pushEv("locked", uid);  showMsg("Selamat datang", "LOCK", 2000); return; }
   openDoor(openSec); pushEv("ok", uid);
 }
 

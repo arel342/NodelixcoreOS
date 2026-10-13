@@ -51,7 +51,7 @@
                 ${o.input ? '<input class="dlg-in" type="text" autocomplete="off" spellcheck="false">' : ''}
                 <div class="dlg-btns">${o.cancel ? `<button type="button" class="dlg-b dlg-c">${esc(o.cancel)}</button>` : ''}<button type="button" class="dlg-b dlg-y${o.danger ? ' dlg-danger' : ''}">${esc(o.ok)}</button></div></div>`;
             const inp = el.querySelector('.dlg-in'), yes = el.querySelector('.dlg-y'), no = el.querySelector('.dlg-c');
-            if (inp) { inp.value = o.value || ''; inp.placeholder = o.placeholder || ''; inp.maxLength = o.maxLength || 120; }
+            if (inp) { inp.type = o.inputType === 'password' ? 'password' : 'text'; inp.value = o.value || ''; inp.placeholder = o.placeholder || ''; inp.maxLength = o.maxLength || 120; }
             const done = v => { el.remove(); document.removeEventListener('keydown', key, true); if (prev && prev.focus) try { prev.focus(); } catch (e) { } resolve(v); };
             const accept = () => done(inp ? inp.value : true), reject = () => done(inp ? null : false);
             const key = e => {
@@ -79,7 +79,7 @@
         return queue({ type, title: o.title || TITLE[type](), message, ok: o.ok || t('ui.okBtn') }).then(() => { open.delete(message); });
     };
     window.uiConfirm = (message, o = {}) => queue({ type: o.type || (o.danger ? 'warn' : 'ask'), title: o.title || TITLE.ask(), message, ok: o.ok || t('ui.yes'), cancel: o.cancel || t('ui.cancel'), danger: o.danger });
-    window.uiPrompt = (message, value = '', o = {}) => queue({ type: 'ask', title: o.title || t('ui.input'), message, input: true, value, placeholder: o.placeholder, maxLength: o.maxLength, ok: o.ok || t('ui.save'), cancel: t('ui.cancel') });
+    window.uiPrompt = (message, value = '', o = {}) => queue({ type: 'ask', title: o.title || t('ui.input'), message, input: true, inputType: o.inputType, value, placeholder: o.placeholder, maxLength: o.maxLength, ok: o.ok || t('ui.save'), cancel: t('ui.cancel') });
 
     // Dialog "sedang bekerja" (tanpa tombol) untuk proses panjang, mis. kompres ZIP:  const b = uiBusy('Mengompres', 'video.mp4'); ... b.close();
     window.uiBusy = (title, message) => {

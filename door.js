@@ -10,7 +10,7 @@ const N = (k, d) => { const v = parseFloat(process.env[k]); return Number.isFini
 const normUid = u => { u = String(u || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase(); return /^[0-9A-F]{8,20}$/.test(u) ? u : null; };
 const cleanText = t => String(t || '').replace(/[\x00-\x1f]/g, '').trim().slice(0, 24);
 
-module.exports = ({ app, broadcast, notify }) => {
+module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     const FILE = path.join(__dirname, 'data', 'door.json');
     let db = { ver: 1, openSec: 5, enabled: true, cards: [], log: [] };
     try { db = { ...db, ...JSON.parse(fs.readFileSync(FILE, 'utf8')) }; } catch { }
@@ -75,12 +75,13 @@ module.exports = ({ app, broadcast, notify }) => {
         if (syncing || !online) return false;
         syncing = true; lastSync = Date.now();
         let ok = false;
+        const version = db.ver;
         try {
-            const body = [`V=${db.ver}`, `S=${db.openSec}`, `E=${db.enabled ? 1 : 0}`, ...db.cards.map(c => `C=${c.uid}`)].join('\n') + '\n';
+            const body = [`V=${version}`, `S=${db.openSec}`, `E=${db.enabled ? 1 : 0}`, ...db.cards.map(c => `${c.admin === true ? 'A' : 'C'}=${c.uid}`)].join('\n') + '\n';
             const j = await call('/api/sync', 'POST', body);
-            if (j.ver !== db.ver) throw new Error('Versi konfigurasi tidak cocok');
+            if (j.ver !== version) throw new Error('Versi konfigurasi tidak cocok');
             if (raw) raw.ver = j.ver;
-            ok = true;
+            ok = db.ver === version;
         } catch (e) {
             console.error('[Pintu] Gagal menyinkronkan konfigurasi:', e.message);
         } finally { syncing = false; push(); }
@@ -256,6 +257,20 @@ module.exports = ({ app, broadcast, notify }) => {
         log('info', 'renamed', { old: c.name, name });
         c.name = name; save(); push();
         res.json({ success: true });
+    });
+
+    app.post('/api/door/cards/admin', async (req, res) => {
+        const { uid: value, admin } = req.body || {};
+        const uid = normUid(value), c = db.cards.find(c => c.uid === uid);
+        if (!c) return fail(res, 404, T('door.cardNotFound'));
+        if (typeof admin !== 'boolean') return fail(res, 400, T('door.badAdmin'));
+        // Password hanya diperiksa di server, tidak disimpan/dikirim ke ESP atau broadcast.
+        if (admin && !verifyDashboardPassword(req, res)) return;
+        c.admin = admin;
+        log('info', admin ? 'adminAdded' : 'adminRemoved', { name: c.name });
+        const synced = await bump();
+        push();
+        res.json({ success: true, synced, message: T(synced ? 'door.adminSaved' : 'door.adminPending') });
     });
 
     app.delete('/api/door/cards/:uid', (req, res) => {

@@ -59,14 +59,30 @@ function renderDoor(s) {
 
     const sigC = JSON.stringify(s.cards) + Math.floor(Date.now() / 30000) + getLang();
     if (sigC !== dr.sigC) {
+        const openMenu = $d('d-cards').querySelector('.dr-menu[open]');
+        const openUid = openMenu && openMenu.closest('[data-uid]').dataset.uid;
+        const focusIndex = openMenu ? [...openMenu.querySelectorAll('summary,button')].indexOf(document.activeElement) : -1;
         dr.sigC = sigC;
         $d('d-count').textContent = s.cards.length;
         $d('d-cards').innerHTML = s.cards.length ? s.cards.map(c => `<li class="dr-card" data-uid="${c.uid}">
             <div class="dr-av"><i class="fa-solid fa-id-card"></i></div>
-            <div class="dr-grow"><div class="dr-nm">${escapeHtml(c.name)}</div><div class="dr-sub"><span class="dr-uid">${c.uid}</span> · ${ago(c.last)}</div></div>
-            <button class="ib" title="${escapeHtml(t('d.ariaRename'))}" aria-label="${escapeHtml(t('d.ariaRename') + ' ' + c.name)}" onclick="doorRename('${c.uid}')"><i class="fa-solid fa-pen"></i></button>
-            <button class="ib del" title="${escapeHtml(t('d.ariaDel'))}" aria-label="${escapeHtml(t('d.ariaDel') + ' ' + c.name)}" onclick="doorDelete('${c.uid}')"><i class="fa-solid fa-trash"></i></button></li>`).join('')
+            <div class="dr-grow"><div class="dr-nm">${escapeHtml(c.name)}${c.admin === true ? ` <span class="dr-admin">${escapeHtml(t('d.adminBadge'))}</span>` : ''}</div><div class="dr-sub"><span class="dr-uid">${c.uid}</span> · ${ago(c.last)}</div></div>
+            <details class="dr-menu" onclick="doorCardMenu(event)">
+                <summary class="ib" title="${escapeHtml(t('d.cardMenu'))}" aria-label="${escapeHtml(t('d.cardMenu') + ' ' + c.name)}"><i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i></summary>
+                <div class="dr-menu-items">
+                    <button type="button" onclick="doorRename('${c.uid}')"><i class="fa-solid fa-pen" aria-hidden="true"></i>${escapeHtml(t('d.ariaRename'))}</button>
+                    <button type="button" onclick="doorAdmin('${c.uid}')"><i class="fa-solid fa-user-shield" aria-hidden="true"></i>${escapeHtml(t(c.admin === true ? 'd.removeAdmin' : 'd.makeAdmin'))}</button>
+                    <button type="button" class="del" onclick="doorDelete('${c.uid}')"><i class="fa-solid fa-trash" aria-hidden="true"></i>${escapeHtml(t('d.ariaDel'))}</button>
+                </div>
+            </details></li>`).join('')
             : `<li class="dr-empty">${escapeHtml(t('d.emptyCards'))}</li>`;
+        if (openUid) {
+            const menu = [...$d('d-cards').querySelectorAll('.dr-menu')].find(m => m.closest('[data-uid]').dataset.uid === openUid);
+            if (menu) {
+                menu.open = true;
+                if (focusIndex >= 0) menu.querySelectorAll('summary,button')[focusIndex].focus();
+            }
+        }
     }
     const sigL = JSON.stringify(s.log) + getLang();
     if (sigL !== dr.sigL) {
@@ -79,6 +95,30 @@ function renderDoor(s) {
         dot.setAttribute('fill', s.online ? '#1e5a36' : '#c2410c'); pt.setAttribute('fill', s.online ? '#1e5a36' : '#c2410c');
         txt.textContent = s.online ? t('topo.online') : t('topo.offline'); txt.setAttribute('fill', s.online ? '#15803d' : '#dc2626');
     }
+}
+
+// Native details/summary mendukung klik, Enter/Space, dan navigasi Tab.
+function doorCardMenu(e) {
+    const menu = e.currentTarget;
+    document.querySelectorAll('.dr-menu[open]').forEach(m => { if (m !== menu) m.open = false; });
+    if (e.target.closest('button')) { menu.open = false; menu.querySelector('summary').focus(); }
+}
+document.addEventListener('click', e => {
+    if (!e.target.closest('.dr-menu')) document.querySelectorAll('.dr-menu[open]').forEach(m => { m.open = false; });
+});
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') document.querySelectorAll('.dr-menu[open]').forEach(m => { m.open = false; m.querySelector('summary').focus(); });
+});
+async function doorAdmin(uid) {
+    const c = dr.s.cards.find(x => x.uid === uid); if (!c) return;
+    const admin = c.admin !== true;
+    let password;
+    if (admin) {
+        password = await uiPrompt(t('d.adminPasswordPrompt', { name: c.name }), '', { title: t('d.makeAdmin'), inputType: 'password', maxLength: 4096 });
+        if (password === null || password === '') return;
+    } else if (!(await uiConfirm(t('d.removeAdminMsg', { name: c.name }), { title: t('d.removeAdmin'), danger: true }))) return;
+    const j = await dpost('/api/door/cards/admin', { uid, admin, ...(admin ? { password } : {}) });
+    if (j.success) await loadDoor();
 }
 
 async function doorOpen() { $d('d-open').disabled = true; await dpost('/api/door/open', {}, t('d.opened')); }
