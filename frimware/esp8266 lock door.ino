@@ -239,6 +239,16 @@ void hEnroll() {                                         // /api/enroll?sec=30  
 
 // ---------- Update firmware (OTA): POST /api/ota, body multipart berisi file .bin ----------
 // Dipakai tab "Update Firmware" di web dan menu Termux (node update-fw.js).
+//
+// Nama fungsi pesan error berbeda antar core (ESP8266: getErrorString, ESP32: errorString).
+// Kalau core kamu ternyata berbeda, tukar angka OTA_USE_GETERR di bawah.
+#define OTA_USE_GETERR 1
+#if OTA_USE_GETERR
+  #define OTA_ERRSTR() Update.getErrorString()
+#else
+  #define OTA_ERRSTR() Update.errorString()
+#endif
+
 bool otaOk = false, otaDenied = false;
 String otaErr;
 uint32_t otaWritten = 0, otaRestartAt = 0, otaLcdAt = 0;
@@ -253,12 +263,12 @@ void hOtaUpload() {
     otaTotal = server.header("Content-Length").toInt();                 // perkiraan ukuran kiriman (untuk persen di LCD)
     lcdShow("Update firmware", "0%");
     uint32_t space = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;   // ruang maksimal untuk gambar baru
-    if (!Update.begin(space)) otaErr = Update.errorString();
+    if (!Update.begin(space)) otaErr = OTA_ERRSTR();
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (otaDenied || otaErr.length() || !Update.isRunning()) return;
     // Gambar firmware ESP selalu diawali byte 0xE9: tolak file lain sebelum ditulis
     if (otaWritten == 0 && (up.currentSize < 1 || up.buf[0] != 0xE9)) { otaErr = "bukan gambar firmware"; return; }
-    if (Update.write(up.buf, up.currentSize) != up.currentSize) { otaErr = Update.errorString(); return; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { otaErr = OTA_ERRSTR(); return; }
     otaWritten += up.currentSize;
     if (millis() - otaLcdAt > 500) {                                    // progres di LCD (loop() sedang sibuk)
       otaLcdAt = millis();
@@ -268,10 +278,13 @@ void hOtaUpload() {
     }
   } else if (up.status == UPLOAD_FILE_END) {
     if (otaDenied || otaErr.length()) return;
-    if (Update.end(true)) otaOk = true; else otaErr = Update.errorString();
+    if (Update.end(true)) otaOk = true; else otaErr = OTA_ERRSTR();
   } else if (up.status == UPLOAD_FILE_ABORTED) {
-    Update.abort();
     if (!otaErr.length()) otaErr = "upload dibatalkan";
+    // Core ini tidak punya Update.abort(): kalau update sudah mulai, restart supaya status updater
+    // bersih dan percobaan berikutnya bisa Update.begin() lagi. Firmware lama tetap dipakai karena
+    // partisi boot baru diganti setelah Update.end() berhasil.
+    if (Update.isRunning() || otaWritten) otaRestartAt = millis() + 1500;
   }
 }
 
