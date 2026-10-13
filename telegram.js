@@ -99,7 +99,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
                 }
                 return send(enabled
                     ? '🔐 Lock kartu RFID aktif kembali.'
-                    : '🔒 Lock kartu RFID dimatikan. Kartu yang terdaftar tidak dapat membuka pintu.', message.chat.id);
+                    : '🔒 Lock kartu RFID dimatikan. Kartu biasa tidak dapat membuka pintu; kartu admin tetap bisa.', message.chat.id);
             }
 
             if (cmd === 'open') {

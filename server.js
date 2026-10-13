@@ -168,7 +168,23 @@ app.post('/api/reset-password', (req, res) => {
 // ================= ESP32 MONITOR =================
 const esp32 = require('./esp32')({ app, broadcast, notify });
 // ================= PINTU RFID (ESP8266) =================
-const door = require('./door')({ app, broadcast, notify });
+const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword(req, res) {
+    const f = fails.get(req.ip) || { n: 0, until: 0 };
+    if (f.until > Date.now()) {
+        res.status(429).json({ success: false, message: T('auth.tooMany') });
+        return false;
+    }
+    const password = (req.body || {}).password;
+    if (typeof password !== 'string' || !env('ADMIN_PASSWORD') || !same(password, env('ADMIN_PASSWORD'))) {
+        f.n++;
+        if (f.n >= 5) { f.n = 0; f.until = Date.now() + 5 * 60 * 1000; }
+        fails.set(req.ip, f);
+        res.status(403).json({ success: false, message: T('door.adminPasswordWrong') });
+        return false;
+    }
+    fails.delete(req.ip);
+    return true;
+} });
 // ================= MONITOR SISTEM (CPU/RAM/flash disk) =================
 const system = require('./system')({ app, broadcast });
 // ================= TERMINAL COMMAND (Pengaturan > Terminal) =================

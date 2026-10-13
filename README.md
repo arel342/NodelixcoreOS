@@ -193,7 +193,7 @@ TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 ```
 
-`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses semua kartu sampai diaktifkan kembali; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
 Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 
@@ -349,3 +349,9 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
   * Relay 4 ➔ `GPIO 32`
 * **module DHT11**:
   *DHT11 ➔ 'GPIO 4'
+
+### Kartu admin pintu RFID
+
+Di tab **Pintu RFID / Lock Door**, tekan menu **⋮** pada kartu terdaftar untuk mengubah nama, menghapus kartu, atau memilih **Jadikan kartu admin**. Penetapan admin memerlukan password login dashboard saat ini (diverifikasi di server). Kartu admin tetap bisa membuka pintu ketika lock door dimatikan. **Hapus admin** hanya mencabut hak admin, tidak menghapus kartu dari daftar.
+
+**Wajib unggah ulang `frimware/esp8266 lock door.ino` (versi 1.1)** agar ESP8266 mengenali kartu admin. Status admin disimpan di server dan disinkronkan ke LittleFS ESP8266, sehingga tetap berlaku saat server offline atau ESP restart setelah sinkronisasi. Perubahan saat perangkat offline baru berlaku di pintu setelah sinkronisasi berhasil. Kartu lama otomatis tetap menjadi kartu biasa.
