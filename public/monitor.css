@@ -174,3 +174,35 @@
 .tm-btns .ib{flex:none;width:34px;height:34px}
 .tm-form [hidden]{display:none}
 .tm-off{padding:16px 4px;color:var(--mut);text-align:center}
+
+/* ===== Tab Update Firmware (OTA file .bin) ===== */
+.fw-devs{display:grid;gap:10px;margin-top:12px}
+.fw-dev{display:flex;align-items:center;gap:12px;width:100%;padding:13px 16px;border:1.5px solid var(--line);border-radius:14px;background:#fff;cursor:pointer;font:inherit;font-weight:600;color:var(--ink);text-align:left;transition:border-color .2s,background .2s}
+.fw-dev:hover{background:#f6f9fd}
+.fw-dev[aria-pressed=true]{border-color:#2f78be;background:#eef5fc}
+.fw-dev:disabled{opacity:.5;cursor:not-allowed}
+.fw-dev>i{font-size:20px;color:#2f78be;width:24px;text-align:center;flex:none}
+.fw-g{flex:1;min-width:0;display:block}
+.fw-g b{display:block;overflow-wrap:anywhere}
+.fw-chip{flex:none;display:inline-block;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:600;background:#eef2f9;color:var(--mut)}
+.fw-chip.on{background:#e1f6ec;color:#067a52}
+.fw-chip.off{background:#fde4e4;color:#b42318}
+.fw-chip.warn{background:#fff3d6;color:#8a5a00}
+.fw-drop{display:flex;align-items:center;gap:14px;margin-top:12px;padding:18px;border:2px dashed var(--line);border-radius:16px;cursor:pointer;transition:border-color .2s,background .2s}
+.fw-drop:hover,.fw-drop.over{border-color:#2f78be;background:#f6f9fd}
+.fw-drop>i{font-size:26px;color:#2f78be;flex:none}
+.fw-file{display:flex;align-items:center;gap:12px;margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:14px;background:#f8fafd}
+.fw-file>i{color:#2f78be;font-size:18px;flex:none}
+.fw-nm{overflow-wrap:anywhere}
+.fw-warn{margin-top:12px;padding:12px 14px;border-radius:14px;background:#fff3d6;border-left:4px solid var(--amber);font-size:13px;line-height:1.5;color:#5b4300}
+.fw-warn>i{color:#b45309}
+.fw-steps{margin:10px 0 0;padding-left:20px;font-size:13px;line-height:1.55;color:#475569;display:grid;gap:6px}
+.fw-steps code{background:#eef2f9;border-radius:6px;padding:1px 6px}
+.fw-bar{position:relative;height:10px;border-radius:6px;background:#e8edf6;overflow:hidden;margin:14px 0 8px}
+.fw-bar>i{display:block;height:100%;width:0;background:#2f78be;transition:width .3s}
+.fw-bar.busy>i{width:100%;background:repeating-linear-gradient(90deg,#2f78be 0 14px,#4aa3ff 14px 28px);background-size:28px 100%;animation:fwmove 1s linear infinite}
+.fw-bar.done>i{background:#15803d}
+.fw-bar.fail>i{background:#dc2626}
+.fw-acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+@keyframes fwmove{to{background-position:28px 0}}
+@media(prefers-reduced-motion:reduce){.fw-bar.busy>i{animation:none}}

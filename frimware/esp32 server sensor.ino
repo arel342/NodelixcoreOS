@@ -7,12 +7,24 @@
   - Suhu & kelembapan DHT11 (GPIO 4), dibaca tanpa library tambahan
   - Server (Termux) mengambil data lewat IP: GET /api/data, POST /api/relay
 
-  Hanya memakai library bawaan board ESP32 (WiFi, WebServer, ESPmDNS).
-  Board: "ESP32 Dev Module".
+  - Update firmware (OTA) sejak versi 1.2: server Termux mengirim file .bin ke POST /api/ota
+
+  Hanya memakai library bawaan board ESP32 (WiFi, WebServer, ESPmDNS, Update).
+  Board      : "ESP32 Dev Module".
+  Partisi    : WAJIB memakai skema dengan OTA agar update lewat jaringan bisa dipakai,
+               mis. "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)". Skema bawaan
+               "Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)" tidak punya partisi OTA,
+               jadi /api/ota akan menjawab error "no OTA partition".
+
+  Update firmware (OTA):
+    Gambar baru ditulis ke partisi OTA lewat library Update; kalau verifikasi berhasil ESP restart
+    sendiri dan memakai firmware baru, kalau gagal gambar lama tetap jalan. Dipakai oleh tab
+    "Update Firmware" di web dan menu Termux (node update-fw.js).
 */
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <Update.h>          // OTA: menulis firmware baru ke partisi OTA
 
 // ===================== KONFIGURASI =====================
 const char* WIFI_SSID = "your-wifi-name";
@@ -20,6 +32,8 @@ const char* WIFI_PASS = "your-wifi-password";
 const char* API_KEY   = "replace-this-API";   // harus sama dengan ESP32_API_KEY di .env
 
 #define USE_STATIC_IP 1                              // 1 = IP tetap (samakan dengan ESP32_IP di .env)
+
+#define FW_VER       "1.2"                           // 1.2 = dukungan update firmware lewat jaringan (OTA)
 IPAddress IP_ADDR(192, 168, 11, 50), IP_GW(192, 168, 11, 1), IP_MASK(255, 255, 255, 0), IP_DNS(192, 168, 11, 1);
 
 // --- Baterai: R1 ke baterai+, R2 ke GND. en=false -> pin tidak dibaca (jangan diaktifkan jika belum dipasang)
@@ -226,7 +240,7 @@ int relaysJson(char* b, int sz) {
 void hData() {
   if (!authOk()) return;
   char b[1600];
-  int n = snprintf(b, sizeof(b), "{\"ok\":true,\"device\":\"esp32-plts\",\"fw\":\"1.1\",\"ip\":\"%s\",\"rssi\":%d,\"uptime\":%lu,\"heap\":%u,\"battery\":[",
+  int n = snprintf(b, sizeof(b), "{\"ok\":true,\"device\":\"esp32-plts\",\"fw\":\"" FW_VER "\",\"ip\":\"%s\",\"rssi\":%d,\"uptime\":%lu,\"heap\":%u,\"battery\":[",
                    WiFi.localIP().toString().c_str(), WiFi.RSSI(), millis() / 1000, (unsigned)ESP.getFreeHeap());
   for (int i = 0; i < 3; i++)
     n += snprintf(b + n, sizeof(b) - n, "%s{\"id\":\"%s\",\"pin\":%d,\"en\":%d,\"ratio\":%.4f,\"mv\":%.0f,\"v\":%.3f}",
@@ -267,6 +281,49 @@ void hRelay() {
   server.send(200, "application/json", b);
 }
 
+// ---------- Update firmware (OTA): POST /api/ota, body multipart berisi file .bin ----------
+// Dipakai tab "Update Firmware" di web dan menu Termux (node update-fw.js).
+bool otaOk = false, otaDenied = false;
+String otaErr;
+uint32_t otaWritten = 0, otaRestartAt = 0;
+
+void hOtaUpload() {
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    otaOk = false; otaDenied = false; otaErr = ""; otaWritten = 0;
+    // Kunci API diperiksa sebelum satu byte pun ditulis ke flash
+    if (server.header("X-API-Key") != API_KEY) { otaDenied = true; otaErr = "unauthorized"; return; }
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) otaErr = Update.errorString();   // gambar ESP32 memakai partisi OTA
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (otaDenied || otaErr.length()) return;
+    // Gambar firmware ESP selalu diawali byte 0xE9: tolak file lain sebelum ditulis
+    if (otaWritten == 0 && (up.currentSize < 1 || up.buf[0] != 0xE9)) { otaErr = "bukan gambar firmware"; return; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { otaErr = Update.errorString(); return; }
+    otaWritten += up.currentSize;
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (otaDenied || otaErr.length()) return;
+    if (Update.end(true) && !Update.hasError()) otaOk = true; else otaErr = Update.errorString();
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    if (!otaErr.length()) otaErr = "upload dibatalkan";
+  }
+}
+
+void hOta() {
+  server.sendHeader("Connection", "close");
+  if (otaDenied) { server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
+  if (otaOk) {
+    otaRestartAt = millis() + 1200;                     // jawab dulu ke server, baru restart (lihat loop)
+    char b[160];
+    snprintf(b, sizeof(b), "{\"ok\":true,\"device\":\"esp32-plts\",\"bytes\":%lu}", (unsigned long)otaWritten);
+    server.send(200, "application/json", b);
+    return;
+  }
+  String e = otaErr.length() ? otaErr : (otaWritten ? "gagal menulis flash" : "tidak ada file");
+  e.replace("\"", "'");
+  server.send(500, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+}
+
 void setup() {
   // Keluaran pendamping dulu (supaya setRelay(0,false) langsung menyalakan GPIO 13 & mematikan GPIO 12)
   pinMode(PIN_AUX_ON, OUTPUT);
@@ -292,9 +349,10 @@ void setup() {
 
   const char* hdr[] = {"X-API-Key"};
   server.collectHeaders(hdr, 1);
-  server.on("/", HTTP_GET, [] { server.send(200, "text/plain", "ESP32 PLTS monitor\nGET /api/data | POST /api/relay?ch=1..3|all&state=0|1\nHeader: X-API-Key"); });
+  server.on("/", HTTP_GET, [] { server.send(200, "text/plain", "ESP32 PLTS monitor\nGET /api/data | POST /api/relay?ch=1..3|all&state=0|1 /api/ota\nHeader: X-API-Key"); });
   server.on("/api/data", HTTP_GET, hData);
   server.on("/api/relay", HTTP_POST, hRelay);
+  server.on("/api/ota", HTTP_POST, hOta, hOtaUpload);   // update firmware dari server (OTA)
   server.begin();
 
   xTaskCreatePinnedToCore(sensorTask, "sensor", 6144, NULL, 1, NULL, 1);
@@ -302,6 +360,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
+  if (otaRestartAt && (int32_t)(millis() - otaRestartAt) >= 0) ESP.restart();   // OTA selesai: pakai firmware baru
   static uint32_t lastCheck = 0, lastOk = 0;
   if (WiFi.status() == WL_CONNECTED) lastOk = millis();
   if (millis() - lastCheck > 15000) {

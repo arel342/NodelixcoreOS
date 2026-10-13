@@ -13,11 +13,18 @@
 
   Tampilan LCD:  "Selamat datang" / "Server ON"
     kartu sah -> UNLOCK | kartu belum terdaftar -> "Kartu belum / di daftar" | lock door dimatikan dari server -> LOCK
+
+  Update firmware (OTA) - sejak versi 1.2:
+    Server (Termux) mengirim file .bin ke POST /api/ota (multipart, header X-API-Key). Gambar baru
+    ditulis ke partisi OTA lewat library Update; kalau verifikasi berhasil ESP restart sendiri dan
+    memakai firmware baru, kalau gagal gambar lama tetap jalan. Pilih skema flash yang punya OTA,
+    mis. "4MB (FS:2MB OTA:~1019KB)". Selama proses, LCD menampilkan "Update firmware" + persen.
 */
 #include <ESP8266WiFi.h>
 #include <SPI.h> 
 #include <ESP8266WebServer.h>
 #include <ESP8266mDNS.h>
+#include <Updater.h>          // OTA: menulis firmware baru ke partisi OTA
 #include <LittleFS.h>
 #include <Wire.h>
 #include <MFRC522.h>
@@ -39,7 +46,7 @@ IPAddress IP_ADDR(192, 168, 11, 60), IP_GW(192, 168, 11, 1), IP_MASK(255, 255, 2
 #define LCD_ADDR    0x27    // alamat I2C LCD (0x27 atau 0x3F; otomatis dicoba keduanya)
 
 #define MAX_CARDS    150
-#define FW_VER       "1.1"
+#define FW_VER       "1.2"      // 1.2 = dukungan update firmware lewat jaringan (OTA)
 // =======================================================
 
 // ---------- LCD 1602 lewat PCF8574 (mode 4-bit) ----------
@@ -230,6 +237,59 @@ void hEnroll() {                                         // /api/enroll?sec=30  
   server.send(200, "application/json", "{\"ok\":true}");
 }
 
+// ---------- Update firmware (OTA): POST /api/ota, body multipart berisi file .bin ----------
+// Dipakai tab "Update Firmware" di web dan menu Termux (node update-fw.js).
+bool otaOk = false, otaDenied = false;
+String otaErr;
+uint32_t otaWritten = 0, otaRestartAt = 0, otaLcdAt = 0;
+int32_t otaTotal = 0;
+
+void hOtaUpload() {
+  HTTPUpload& up = server.upload();
+  if (up.status == UPLOAD_FILE_START) {
+    otaOk = false; otaDenied = false; otaErr = ""; otaWritten = 0; otaLcdAt = 0;
+    // Kunci API diperiksa sebelum satu byte pun ditulis ke flash
+    if (server.header("X-API-Key") != API_KEY) { otaDenied = true; otaErr = "unauthorized"; return; }
+    otaTotal = server.header("Content-Length").toInt();                 // perkiraan ukuran kiriman (untuk persen di LCD)
+    lcdShow("Update firmware", "0%");
+    uint32_t space = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;   // ruang maksimal untuk gambar baru
+    if (!Update.begin(space)) otaErr = Update.errorString();
+  } else if (up.status == UPLOAD_FILE_WRITE) {
+    if (otaDenied || otaErr.length() || !Update.isRunning()) return;
+    // Gambar firmware ESP selalu diawali byte 0xE9: tolak file lain sebelum ditulis
+    if (otaWritten == 0 && (up.currentSize < 1 || up.buf[0] != 0xE9)) { otaErr = "bukan gambar firmware"; return; }
+    if (Update.write(up.buf, up.currentSize) != up.currentSize) { otaErr = Update.errorString(); return; }
+    otaWritten += up.currentSize;
+    if (millis() - otaLcdAt > 500) {                                    // progres di LCD (loop() sedang sibuk)
+      otaLcdAt = millis();
+      String b = (otaTotal > 1024 && (uint32_t)otaTotal >= otaWritten) ? String((uint32_t)((uint64_t)otaWritten * 100 / (uint32_t)otaTotal)) + "%"
+                                                                : String(otaWritten / 1024) + " KB";
+      lcdShow("Update firmware", b);
+    }
+  } else if (up.status == UPLOAD_FILE_END) {
+    if (otaDenied || otaErr.length()) return;
+    if (Update.end(true)) otaOk = true; else otaErr = Update.errorString();
+  } else if (up.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    if (!otaErr.length()) otaErr = "upload dibatalkan";
+  }
+}
+
+void hOta() {
+  server.sendHeader("Connection", "close");
+  if (otaDenied) { showMsg("Update gagal", "Kunci API salah", 4000); server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
+  if (otaOk) {
+    lcdShow("Update selesai", "Restart...");
+    otaRestartAt = millis() + 1200;                                     // jawab dulu ke server, baru restart (lihat loop)
+    server.send(200, "application/json", "{\"ok\":true,\"device\":\"esp8266-door\"}");
+    return;
+  }
+  String e = otaErr.length() ? otaErr : (otaWritten ? "gagal menulis flash" : "tidak ada file");
+  e.replace("\"", "'");
+  showMsg("Update gagal", e.substring(0, 16), 6000);
+  server.send(500, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
+}
+
 void hSync() {                                           // body text/plain, format sama dengan /cfg.txt
   if (!auth()) return;
   if (!parseCfg(server.arg("plain"))) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"format\"}"); return; }
@@ -265,12 +325,13 @@ void setup() {
   MDNS.begin("pintu-esp8266");
 
   server.collectHeaders("X-API-Key");
-  server.on("/", HTTP_GET, [] { server.send(200, "text/plain", "ESP8266 door lock\nGET /api/status | POST /api/open /api/close /api/enroll /api/sync\nHeader: X-API-Key"); });
+  server.on("/", HTTP_GET, [] { server.send(200, "text/plain", "ESP8266 door lock\nGET /api/status | POST /api/open /api/close /api/enroll /api/sync /api/ota\nHeader: X-API-Key"); });
   server.on("/api/status", HTTP_GET, hStatus);
   server.on("/api/open", HTTP_POST, hOpen);
   server.on("/api/close", HTTP_POST, hClose);
   server.on("/api/enroll", HTTP_POST, hEnroll);
   server.on("/api/sync", HTTP_POST, hSync);
+  server.on("/api/ota", HTTP_POST, hOta, hOtaUpload);      // update firmware dari server (OTA)
   server.begin();
 }
 
@@ -278,6 +339,8 @@ void loop() {
   server.handleClient();
   MDNS.update();
   uint32_t now = millis();
+
+  if (otaRestartAt && (int32_t)(now - otaRestartAt) >= 0) ESP.restart();   // OTA selesai: pakai firmware baru
 
   if (relayOn && (int32_t)(now - relayOffAt) >= 0) relaySet(false);
   if (enrolling && (int32_t)(now - enrollUntil) >= 0) { enrolling = false; pushEv("enroll_timeout", ""); showMsg("Waktu habis", "", 1500); }
