@@ -3,69 +3,59 @@
   - Tegangan baterai Li-ion/LiPo 3S lewat pembagi tegangan (ADC1)
   - Arus AC lewat ACS712-20A (true RMS + filter)
   - Relay 4 channel (relay 1 & 2 digabung di GPIO 26)
-  - Keluaran pendamping Relay 1 & 2: GPIO 12 (ON) dan GPIO 13 (OFF), saling berlawanan
-  - Suhu & kelembapan DHT11 (GPIO 4), dibaca tanpa library tambahan
+  - Keluaran pendamping Relay 1 & 2: GPIO 12 (ON) dan GPIO 13 (OFF)
+  - Suhu & kelembapan DHT11 (GPIO 4), bit-bang tanpa library tambahan
   - Server (Termux) mengambil data lewat IP: GET /api/data, POST /api/relay
+  - OTA sejak v1.2 (POST /api/ota)
+  - Semua pengaturan jaringan dari WEB sejak v1.3
+  - v1.4.0 = UI baru seragam dengan ESP8266 + fix netmask + portal auth bypass
 
-  - Update firmware (OTA) sejak versi 1.2: server Termux mengirim file .bin ke POST /api/ota
+  Board   : "ESP32 Dev Module"
+  Partisi : WAJIB punya OTA (mis. "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)")
 
-  - Sejak versi 1.3 semua pengaturan jaringan diisi dari WEB, tidak lagi di file ini:
-      * Pertama kali dinyalakan (atau tombol BOOT ditahan 3 detik), ESP32 menyalakan WiFi
-        sendiri "Nodelix-ESP32-xxxx". Sambungkan HP ke WiFi itu lalu buka http://192.168.4.1
-        untuk mengisi: nama WiFi, password WiFi, IP (DHCP/statis), dan kunci API.
-      * Nilai disimpan di flash (NVS/Preferences), jadi tetap ada setelah listrik mati.
-      * Bisa juga dikirim dari web Termux: Pengaturan > ESP32 (Mode setup / Kirim pengaturan).
-      * WiFi rumah hilang lebih dari 2 menit -> ESP32 menyalakan mode setup lagi otomatis.
-        Begitu WiFi rumah tersambung, mode setup tertutup sendiri.
-
-  Hanya memakai library bawaan board ESP32 (WiFi, WebServer, ESPmDNS, Update, Preferences).
-  Board      : "ESP32 Dev Module".
-  Partisi    : WAJIB memakai skema dengan OTA agar update lewat jaringan bisa dipakai,
-               mis. "Minimal SPIFFS (1.9MB APP with OTA/190KB SPIFFS)". Skema bawaan
-               "Default 4MB with spiffs (1.2MB APP/1.5MB SPIFFS)" tidak punya partisi OTA,
-               jadi /api/ota akan menjawab error "no OTA partition".
-
-  Update firmware (OTA):
-    Gambar baru ditulis ke partisi OTA lewat library Update; kalau verifikasi berhasil ESP restart
-    sendiri dan memakai firmware baru, kalau gagal gambar lama tetap jalan. Dipakai oleh tab
-    "Update Firmware" di web dan menu Termux (node update-fw.js).
-
-  Endpoint (header X-API-Key harus sama dengan ESP32_API_KEY di .env):
-    GET  /                halaman pengaturan (nama WiFi, password, IP, kunci API)
+  Endpoint:
+    GET  /                halaman pengaturan
     GET  /api/info        status singkat + pengaturan sekarang
-    GET  /api/scan        daftar WiFi yang terdeteksi
-    POST /api/config      simpan pengaturan baru (dipakai halaman ini & web Termux)
-    POST /api/portal      masuk mode setup sekarang (WiFi sendiri + halaman pengaturan)
-    GET  /api/data        data sensor untuk dashboard Termux
+    GET  /api/scan        daftar WiFi
+    POST /api/config      simpan pengaturan baru
+    POST /api/portal      masuk mode setup sekarang
+    GET  /api/data        data sensor untuk dashboard
     POST /api/relay?ch=1..3|all&state=0|1
-    POST /api/ota         update firmware (.bin) dari server Termux
+    POST /api/ota         update firmware (.bin)
 */
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
-#include <Update.h>          // OTA: menulis firmware baru ke partisi OTA
-#include <Preferences.h>     // penyimpanan pengaturan (nama WiFi, password, IP, kunci API)
+#include <Update.h>
+#include <Preferences.h>
+
+// ===================== PROTOTIPE =====================
+struct AcData  { float irms, ipk, mean; bool clip; uint16_t n; };
+struct DhtData { float t, h; bool have; uint32_t okMs; uint32_t err; };
+
+AcData sampleCurrent();
+bool   dhtRead(float& t, float& h);
+bool   dhtDecode(const uint16_t* lo, const uint16_t* hi, float& t, float& h);
+// =====================================================
 
 // ===================== KONFIGURASI =====================
-// Tidak ada lagi WIFI_SSID / WIFI_PASS / kunci API di baris kode: semuanya diisi dari halaman
-// web mode setup (192.168.4.1) atau dari web Termux, lalu disimpan permanen di flash (NVS).
-#define FW_VER       "1.3"        // 1.2 = OTA, 1.3 = mode setup AP + semua pengaturan lewat web
+#define FW_VER       "1.4.0"
 #define AP_PREFIX    "Nodelix-ESP32"
-#define PIN_BTN      0            // tombol BOOT pada board: tahan 3 detik -> masuk mode setup
+#define PIN_BTN      0            // tombol BOOT: tahan 3 detik -> mode setup
 
 struct Cfg {
   String ssid, pass, apiKey;
   bool dhcp = true;
   IPAddress ip{192, 168, 1, 50}, gw{192, 168, 1, 1}, mask{255, 255, 255, 0}, dns{192, 168, 1, 1};
-  bool valid = false;             // sudah pernah diisi (ada nama WiFi + kunci API)?
+  bool valid = false;
 } cfg;
 
 Preferences prefs;
-String apName;                    // nama WiFi mode setup, mis. Nodelix-ESP32-1A2B
+String apName;
 bool portalMode = false;
 uint32_t btnHeld = 0, lastStaTry = 0, wifiOkAt = 0;
 
-// ---------- Baca / tulis pengaturan di flash ----------
+// ---------- Baca / tulis pengaturan di NVS ----------
 void cfgLoad() {
   prefs.begin("nodelix", true);
   cfg.ssid   = prefs.getString("ssid", "");
@@ -79,6 +69,8 @@ void cfgLoad() {
   prefs.end();
   cfg.valid = cfg.ssid.length() > 0 && cfg.apiKey.length() > 0;
 }
+
+// NVS otomatis commit saat prefs.end() — tidak butuh flush manual seperti LittleFS.
 void cfgSave() {
   prefs.begin("nodelix", false);
   prefs.putString("ssid", cfg.ssid);
@@ -90,10 +82,11 @@ void cfgSave() {
   prefs.putString("mask", cfg.mask.toString());
   prefs.putString("dns", cfg.dns.toString());
   prefs.end();
+  Serial.println("[CFG] Pengaturan tersimpan di NVS");
   cfg.valid = cfg.ssid.length() > 0 && cfg.apiKey.length() > 0;
 }
 
-// ---------- Pembaca JSON mini (tanpa library tambahan) ----------
+// ---------- Pembaca JSON mini ----------
 String jsonStr(const String& body, const char* key) {
   String pat = String("\"") + key + "\":";
   int i = body.indexOf(pat);
@@ -119,59 +112,62 @@ bool jsonBool(const String& body, const char* key, bool def) {
   if (!v.length()) return def;
   return v == "1" || v == "true" || v == "on";
 }
+
+// >>> PERBAIKAN: netmask 255.255.255.0 (dan IP berakhiran .0 lain) sekarang valid.
 bool isIp(const String& s) {
   int dots = 0, part = 0;
+  bool hasDigit = false;
   for (unsigned i = 0; i < s.length(); i++) {
     char c = s[i];
-    if (c == '.') { if (i == 0 || s[i - 1] == '.' || part > 255) return false; dots++; part = 0; }
-    else if (c >= '0' && c <= '9') { part = part * 10 + (c - '0'); if (part > 255) return false; }
-    else return false;
+    if (c == '.') {
+      if (!hasDigit || part > 255) return false;
+      dots++; part = 0; hasDigit = false;
+    } else if (c >= '0' && c <= '9') {
+      part = part * 10 + (c - '0');
+      if (part > 255) return false;
+      hasDigit = true;
+    } else {
+      return false;
+    }
   }
-  return dots == 3 && part > 0;
+  return dots == 3 && hasDigit;
 }
 
-// --- Baterai: R1 ke baterai+, R2 ke GND. en=false -> pin tidak dibaca (jangan diaktifkan jika belum dipasang)
+// --- Baterai
 struct Tap { const char* id; uint8_t pin; bool en; float ratio; float mv; float v; };
 Tap taps[] = {
-  {"s1", 35, false, (4700.0f  + 10000.0f) / 10000.0f, 0, 0},   // tap 1S : 4.7k / 10k
-  {"s2", 36, false, (22000.0f + 10000.0f) / 10000.0f, 0, 0},   // tap 2S : 22k / 10k
-  {"s3", 39, true,  (33000.0f + 10000.0f) / 10000.0f, 0, 0},   // pack 3S: 33k / 10k  (GPIO 39 = VN)
+  {"s1", 35, false, (4700.0f  + 10000.0f) / 10000.0f, 0, 0},
+  {"s2", 36, false, (22000.0f + 10000.0f) / 10000.0f, 0, 0},
+  {"s3", 39, true,  (33000.0f + 10000.0f) / 10000.0f, 0, 0},
 };
 
 // --- ACS712-20A
-#define PIN_ACS        34        // ADC1, input-only (GPIO 34 bebas, tidak bentrok dengan relay)
-#define ACS_MV_PER_A   100.0f    // 20A = 100 mV/A
-#define ACS_DIV        1.0f      // 1.0 = output sensor langsung ke ADC. Jika pakai pembagi 10k (atas) + 20k (bawah) isi 0.6667
+#define PIN_ACS        34
+#define ACS_MV_PER_A   100.0f
+#define ACS_DIV        1.0f
 #define MAINS_HZ       50
-#define I_CYCLES       10        // jendela ukur = 10 siklus = 200 ms
-#define SAMPLE_US      250       // ~4 kHz (80 sampel per siklus)
-#define ADC_CLIP_HI_MV 3100      // di atas ini ADC ESP32 jenuh / tidak linear
+#define I_CYCLES       10
+#define SAMPLE_US      250
+#define ADC_CLIP_HI_MV 3100
 #define ADC_CLIP_LO_MV 120
 
-// --- Relay (modul 4 channel). Relay 1 & 2 dipasang paralel di GPIO 26 -> satu tombol, dua relay
-#define RELAY_ACTIVE_LOW 1       // kebanyakan modul: IN=LOW -> relay ON
+// --- Relay
+#define RELAY_ACTIVE_LOW 1
 struct Relay { const char* name; uint8_t pin; bool on; };
 Relay relays[] = { {"Relay 1 & 2", 26, false}, {"Relay 3", 27, false}, {"Relay 4", 32, false} };
 const int NR = sizeof(relays) / sizeof(relays[0]);
 
-// --- Keluaran pendamping Relay 1 & 2 (selalu berlawanan):
-//     Relay 1 & 2 ON  -> GPIO 12 ON,  GPIO 13 OFF
-//     Relay 1 & 2 OFF -> GPIO 13 ON,  GPIO 12 OFF
-//     GPIO 12 = pin strapping (MTDI): saat boot harus LOW. Pakai untuk LED/transistor ke GND,
-//     jangan ditarik HIGH oleh rangkaian luar (ESP32 bisa gagal boot).
+// --- Keluaran pendamping Relay 1 & 2
 #define PIN_AUX_ON      12
 #define PIN_AUX_OFF     13
-#define AUX_ACTIVE_LOW  0        // 0 = "ON" berarti pin HIGH, 1 = "ON" berarti pin LOW
-#define AUX_RELAY_IDX   0        // index di relays[] yang diikuti (0 = "Relay 1 & 2")
+#define AUX_ACTIVE_LOW  0
+#define AUX_RELAY_IDX   0
 
-// --- DHT11 (suhu & kelembapan). Kaki DATA ke GPIO 4 + pull-up 10k ke 3V3 (modul 3 pin biasanya sudah ada)
+// --- DHT11
 #define PIN_DHT         4
-#define DHT_PERIOD_MS   2000     // DHT11 maks. 1 pembacaan/detik; 2 detik lebih aman
-#define DHT_STALE_MS    10000    // tanpa pembacaan valid selama ini -> dianggap tidak terbaca
+#define DHT_PERIOD_MS   2000
+#define DHT_STALE_MS    10000
 // =======================================================
-
-struct AcData { float irms, ipk, mean; bool clip; uint16_t n; };
-struct DhtData { float t, h; bool have; uint32_t okMs; uint32_t err; };
 
 WebServer server(80);
 portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
@@ -187,10 +183,10 @@ void setAux(bool relayOn) {
 void setRelay(int i, bool on) {
   relays[i].on = on;
   digitalWrite(relays[i].pin, (on == !RELAY_ACTIVE_LOW) ? HIGH : LOW);
-  if (i == AUX_RELAY_IDX) setAux(on);     // semua jalur (satu relay / "all" / boot) lewat sini
+  if (i == AUX_RELAY_IDX) setAux(on);
 }
 
-// ---------- Baterai: rata-rata terpangkas 32 sampel (buang min & max) ----------
+// ---------- Baterai: rata-rata terpangkas 32 sampel ----------
 float readTapMv(uint8_t pin) {
   uint32_t s = 0, mn = 99999, mx = 0;
   for (int i = 0; i < 32; i++) {
@@ -202,13 +198,6 @@ float readTapMv(uint8_t pin) {
 }
 
 // ---------- ACS712 AC ----------
-// Filter berlapis:
-//  1) oversampling 2x per sampel
-//  2) median-of-3 untuk membuang spike (noise WiFi / ADC)
-//  3) offset DC (titik tengah ~2.5 V) dibuang dengan rata-rata jendela = N siklus utuh (otomatis ikut drift)
-//  4) true RMS (Welford) -> akurat untuk sinus murni maupun gelombang non-sinus
-//  5) median-of-5 + EMA antar-jendela (di sensorTask) agar angka stabil
-//  6) deteksi clipping bila sinyal menyentuh batas ADC
 float acsMv() { return (analogReadMilliVolts(PIN_ACS) + analogReadMilliVolts(PIN_ACS)) * 0.5f; }
 float med3(float a, float b, float c) { return fmaxf(fminf(a, b), fminf(fmaxf(a, b), c)); }
 
@@ -238,12 +227,8 @@ AcData sampleCurrent() {
   return r;
 }
 
-// ---------- DHT11 (bit-bang, tanpa library) ----------
-// Protokol 1-wire: host menarik LOW >= 18 ms lalu melepas; sensor membalas LOW ~80 us + HIGH ~80 us,
-// lalu 40 bit, tiap bit = LOW ~50 us + HIGH (~27 us = 0, ~70 us = 1).
-// Nilai bit ditentukan dengan membandingkan lama HIGH terhadap lama LOW bit yang sama,
-// jadi tidak bergantung pada kecepatan CPU.
-static uint16_t dhtPulse(int level) {          // lama (us) pin bertahan di `level`; 0 = timeout
+// ---------- DHT11 (bit-bang) ----------
+static uint16_t dhtPulse(int level) {
   uint32_t t0 = micros();
   while (digitalRead(PIN_DHT) == level) {
     if ((uint32_t)(micros() - t0) > 150) return 0;
@@ -251,7 +236,6 @@ static uint16_t dhtPulse(int level) {          // lama (us) pin bertahan di `lev
   return (uint16_t)(micros() - t0);
 }
 
-// 40 pasang (lo, hi) -> 5 byte -> cek checksum -> suhu & kelembapan. false = data rusak.
 bool dhtDecode(const uint16_t* lo, const uint16_t* hi, float& t, float& h) {
   uint8_t d[5] = {0, 0, 0, 0, 0};
   for (int i = 0; i < 40; i++) {
@@ -270,12 +254,12 @@ bool dhtRead(float& t, float& h) {
   uint16_t lo[40] = {0}, hi[40] = {0};
   pinMode(PIN_DHT, OUTPUT);
   digitalWrite(PIN_DHT, LOW);
-  vTaskDelay(pdMS_TO_TICKS(20));               // sinyal start >= 18 ms
+  vTaskDelay(pdMS_TO_TICKS(20));
   bool ok;
-  portENTER_CRITICAL(&dhtMux);                 // jendela baca ~5 ms: jangan terganggu interrupt
+  portENTER_CRITICAL(&dhtMux);
   pinMode(PIN_DHT, INPUT_PULLUP);
   delayMicroseconds(55);
-  ok = dhtPulse(LOW) && dhtPulse(HIGH);        // balasan sensor
+  ok = dhtPulse(LOW) && dhtPulse(HIGH);
   for (int i = 0; ok && i < 40; i++) {
     lo[i] = dhtPulse(LOW);
     hi[i] = dhtPulse(HIGH);
@@ -303,21 +287,21 @@ void sensorTask(void*) {
     for (auto& t : taps) if (t.en) {
       float mv = readTapMv(t.pin), v = mv / 1000.0f * t.ratio;
       t.mv = mv;
-      t.v = (t.v == 0) ? v : t.v + 0.3f * (v - t.v);          // EMA tegangan
+      t.v = (t.v == 0) ? v : t.v + 0.3f * (v - t.v);
     }
     AcData r = sampleCurrent();
     if (first) { for (int i = 0; i < 5; i++) hist[i] = r.irms; ema = r.irms; first = false; }
     hist[hi] = r.irms; hi = (hi + 1) % 5;
     float t5[5]; memcpy(t5, hist, sizeof(t5));
     for (int i = 1; i < 5; i++) for (int j = i; j > 0 && t5[j] < t5[j - 1]; j--) { float x = t5[j]; t5[j] = t5[j - 1]; t5[j - 1] = x; }
-    ema += (t5[2] - ema) * (fabsf(t5[2] - ema) > 0.5f ? 0.6f : 0.25f);   // cepat bila beban berubah besar
+    ema += (t5[2] - ema) * (fabsf(t5[2] - ema) > 0.5f ? 0.6f : 0.25f);
     r.irms = ema;
     portENTER_CRITICAL(&mux); ac = r; portEXIT_CRITICAL(&mux);
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
-// ---------- HTTP ----------
+// ---------- HTTP API ----------
 bool authOk() {
   if (server.header("X-API-Key") == cfg.apiKey || server.arg("key") == cfg.apiKey) return true;
   server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}");
@@ -345,7 +329,7 @@ void hData() {
   n += relaysJson(b + n, sizeof(b) - n);
   portENTER_CRITICAL(&mux); DhtData d = dht; portEXIT_CRITICAL(&mux);
   bool dOk = d.have && (millis() - d.okMs) < DHT_STALE_MS;
-  char tb[12] = "null", hb[12] = "null";          // JSON tidak boleh berisi NaN -> null bila tidak terbaca
+  char tb[12] = "null", hb[12] = "null";
   if (dOk) { snprintf(tb, sizeof(tb), "%.1f", d.t); snprintf(hb, sizeof(hb), "%.1f", d.h); }
   n += snprintf(b + n, sizeof(b) - n, ",\"dht\":{\"pin\":%d,\"ok\":%d,\"t\":%s,\"h\":%s,\"age\":%lu,\"err\":%lu}",
                 PIN_DHT, dOk, tb, hb, d.have ? (unsigned long)((millis() - d.okMs) / 1000) : 0UL, (unsigned long)d.err);
@@ -375,8 +359,7 @@ void hRelay() {
   server.send(200, "application/json", b);
 }
 
-// ---------- Update firmware (OTA): POST /api/ota, body multipart berisi file .bin ----------
-// Dipakai tab "Update Firmware" di web dan menu Termux (node update-fw.js).
+// ---------- OTA ----------
 bool otaOk = false, otaDenied = false;
 String otaErr;
 uint32_t otaWritten = 0, otaRestartAt = 0;
@@ -385,12 +368,10 @@ void hOtaUpload() {
   HTTPUpload& up = server.upload();
   if (up.status == UPLOAD_FILE_START) {
     otaOk = false; otaDenied = false; otaErr = ""; otaWritten = 0;
-    // Kunci API diperiksa sebelum satu byte pun ditulis ke flash
     if (!cfg.apiKey.length() || server.header("X-API-Key") != cfg.apiKey) { otaDenied = true; otaErr = "unauthorized"; return; }
-    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) otaErr = Update.errorString();   // gambar ESP32 memakai partisi OTA
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) otaErr = Update.errorString();
   } else if (up.status == UPLOAD_FILE_WRITE) {
     if (otaDenied || otaErr.length()) return;
-    // Gambar firmware ESP selalu diawali byte 0xE9: tolak file lain sebelum ditulis
     if (otaWritten == 0 && (up.currentSize < 1 || up.buf[0] != 0xE9)) { otaErr = "bukan gambar firmware"; return; }
     if (Update.write(up.buf, up.currentSize) != up.currentSize) { otaErr = Update.errorString(); return; }
     otaWritten += up.currentSize;
@@ -407,7 +388,7 @@ void hOta() {
   server.sendHeader("Connection", "close");
   if (otaDenied) { server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
   if (otaOk) {
-    otaRestartAt = millis() + 1200;                     // jawab dulu ke server, baru restart (lihat loop)
+    otaRestartAt = millis() + 1200;
     char b[160];
     snprintf(b, sizeof(b), "{\"ok\":true,\"device\":\"esp32-plts\",\"bytes\":%lu}", (unsigned long)otaWritten);
     server.send(200, "application/json", b);
@@ -418,88 +399,91 @@ void hOta() {
   server.send(500, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
 }
 
-// ===================== MODE SETUP: WiFi sendiri + halaman pengaturan =====================
-// Halaman ini bisa dibuka dua cara:
-//   * mode setup  -> http://192.168.4.1  (perangkat menyalakan WiFi "%AP_PREFIX%-xxxx")
-//   * sudah tersambung -> http://IP-perangkat (butuh kunci API sekarang kalau sudah diisi)
-// Halaman ini jugalah yang membuat WiFi/IP/kunci API bisa diubah tanpa mengedit file .ino.
+// ===================== HALAMAN PENGATURAN (UI SAMA DENGAN ESP8266) =====================
 const char PAGE[] PROGMEM = R"HTML(
 <!DOCTYPE html><html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Pengaturan %BOARD%</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#eef2f8;color:#0b1a30;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px}
-.w{max-width:520px;margin:0 auto;padding:16px 14px 34px}
-.h{display:flex;align-items:center;gap:11px;padding:4px 2px 14px}
-.lg{width:40px;height:40px;border-radius:12px;background:#0b1a30;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700}
-.h b{font-size:18px}.h span{display:block;font-size:12px;color:#6b7a94}
-.st{background:#fff;border:1px solid #dbe2ee;border-radius:14px;padding:12px 14px;font-size:13px;line-height:1.5;margin-bottom:14px}
-.st b{font-weight:600}.ap{color:#b45309;font-weight:700}
-.c{background:#fff;border:1px solid #dbe2ee;border-radius:16px;padding:16px}
-label.f{display:block;margin:12px 0 0;font-size:12.5px;font-weight:600;color:#3d4b62}
-input[type=text]{width:100%;margin-top:5px;padding:11px 12px;border:1.5px solid #dbe2ee;border-radius:11px;font:inherit;font-size:14.5px;background:#fbfcfe;outline:none}
-input:focus{border-color:#8ab4e8;background:#fff}
-.rw{display:flex;gap:8px;align-items:flex-end}.rw>div{flex:1}
-button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-size:14px;font-weight:600;background:#0b1a30;color:#fff;cursor:pointer}
-button.gh{background:#fff;color:#0b1a30;border:1.5px solid #dbe2ee}
-.sv{width:100%;margin-top:18px;background:#f5a524;color:#3a2500}
-.sv[disabled]{opacity:.5}
-.sw{display:flex;align-items:center;gap:10px;margin:14px 0 0;font-size:13.5px;font-weight:600;color:#3d4b62}
-.sw input{width:19px;height:19px;accent-color:#f5a524}
-.hint{font-size:12px;color:#6b7a94;line-height:1.55;margin:12px 0 0}
-.msg{margin-top:14px;font-size:13px;font-weight:600;border-radius:11px;padding:11px 12px;display:none}
-.msg.ok{display:block;background:#e6f7ec;color:#166534}.msg.err{display:block;background:#fdeaea;color:#991b1b}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#eef2f8;color:#0b1a30;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:15px;line-height:1.5}
+.w{max-width:520px;margin:0 auto;padding:20px 16px 40px}
+.h{display:flex;align-items:center;gap:12px;padding:4px 0 18px}
+.lg{width:44px;height:44px;border-radius:13px;background:#0b1a30;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:17px;flex-shrink:0}
+.h b{font-size:18px;display:block}
+.h span{display:block;font-size:12px;color:#6b7a94;margin-top:2px}
+.st{background:#fff;border:1px solid #dbe2ee;border-radius:14px;padding:14px 16px;font-size:13px;line-height:1.6;margin-bottom:16px;color:#3d4b62}
+.st b{font-weight:600;color:#0b1a30}
+.ap{color:#b45309;font-weight:700}
+.card{background:#fff;border:1px solid #dbe2ee;border-radius:18px;padding:20px 18px}
+label.f{display:block;margin:16px 0 0;font-size:12.5px;font-weight:600;color:#3d4b62;letter-spacing:.2px}
+label.f:first-child{margin-top:0}
+input[type=text]{width:100%;margin-top:6px;padding:12px 14px;border:1.5px solid #dbe2ee;border-radius:12px;font:inherit;font-size:15px;background:#fbfcfe;outline:none;transition:border-color .15s,background .15s;color:#0b1a30}
+input[type=text]:focus{border-color:#f5a524;background:#fff}
+input[type=text]::placeholder{color:#9aa7bd}
+.sw{display:flex;align-items:center;gap:10px;margin:18px 0 0;font-size:13.5px;font-weight:600;color:#3d4b62;cursor:pointer;user-select:none}
+.sw input{width:18px;height:18px;accent-color:#f5a524;cursor:pointer}
+.grid{margin-top:4px}
+.grid.hide{display:none}
+.hint{font-size:12px;color:#6b7a94;line-height:1.6;margin:14px 0 0}
+.msg{margin-top:16px;font-size:13.5px;font-weight:600;border-radius:12px;padding:12px 14px;display:none;line-height:1.4}
+.msg.ok{display:block;background:#e6f7ec;color:#166534}
+.msg.err{display:block;background:#fdeaea;color:#991b1b}
 .msg.work{display:block;background:#eef4fb;color:#2f5f92}
-#static{display:none}
+.sv{width:100%;margin-top:22px;padding:14px;border:0;border-radius:12px;font:inherit;font-size:15px;font-weight:700;background:#f5a524;color:#3a2500;cursor:pointer;transition:opacity .15s}
+.sv:hover{opacity:.92}
+.sv:disabled{opacity:.5;cursor:not-allowed}
 </style></head><body><div class="w">
 <div class="h"><div class="lg">N</div><div><b>NodelixcoreOS</b><span>%BOARD% &middot; firmware %FW%</span></div></div>
 <div class="st" id="st">Memuat status&hellip;</div>
-<div class="c">
+<div class="card">
   <label class="f">Nama WiFi (SSID)</label>
-  <div class="rw"><div><input id="ssid" list="wl" placeholder="WiFi rumah"></div><button type="button" class="gh" onclick="scan()">Cari WiFi</button></div>
-  <datalist id="wl"></datalist>
-  <label class="f">Password WiFi</label><input id="pass" type="text" placeholder="kosongkan bila WiFi terbuka">
+  <input id="ssid" type="text" placeholder="WiFi rumah" autocomplete="off">
+  <label class="f">Password WiFi</label>
+  <input id="pass" type="text" placeholder="kosongkan bila WiFi terbuka" autocomplete="off">
+  <label class="f">Kunci API</label>
+  <input id="key" type="text" placeholder="nlx-..." autocomplete="off">
   <label class="sw"><input id="dhcp" type="checkbox" checked onchange="mode()">IP otomatis (DHCP)</label>
-  <div id="static">
-    <label class="f">IP perangkat</label><input id="ip" placeholder="192.168.1.50">
-    <label class="f">Gateway</label><input id="gw" placeholder="192.168.1.1">
-    <label class="f">Netmask</label><input id="mask" placeholder="255.255.255.0">
-    <label class="f">DNS</label><input id="dns" placeholder="192.168.1.1">
+  <div class="grid" id="static">
+    <label class="f">IP perangkat</label>
+    <input id="ip" type="text" placeholder="192.168.1.50" autocomplete="off">
+    <label class="f">Gateway</label>
+    <input id="gw" type="text" placeholder="192.168.1.1" autocomplete="off">
+    <label class="f">Netmask</label>
+    <input id="mask" type="text" placeholder="255.255.255.0" autocomplete="off">
+    <label class="f">DNS</label>
+    <input id="dns" type="text" placeholder="192.168.1.1" autocomplete="off">
   </div>
-  <label class="f">Kunci API (samakan dengan ESP32_API_KEY di web Termux)</label><input id="key" placeholder="nlx-...">
-  <label class="f">Kunci API sekarang (wajib bila perangkat sudah pernah diisi)</label><input id="cur" placeholder="kunci lama / kosongkan bila belum pernah">
   %OPENFIELD%
   <button class="sv" id="sv" type="button" onclick="save()">Simpan &amp; restart</button>
   <div class="msg" id="msg"></div>
-  <p class="hint">Setelah disimpan perangkat restart lalu tersambung ke WiFi rumah. Untuk mengubah lagi: tahan tombol BOOT/FLASH 3 detik, atau pakai Pengaturan di web Termux.</p>
+  <p class="hint">Setelah disimpan perangkat restart lalu tersambung ke WiFi. Untuk mengubah lagi: tahan tombol BOOT/FLASH 3 detik, atau pakai Pengaturan di web Termux.</p>
 </div>
-<p class="hint" style="text-align:center">%AP% &middot; http://192.168.4.1</p>
+<p class="hint" style="text-align:center;margin-top:16px">%AP% &middot; http://192.168.4.1</p>
 </div>
 <script>
 var $=function(i){return document.getElementById(i)};
 function say(t,k){var m=$('msg');m.className='msg '+k;m.textContent=t}
-function mode(){$('static').style.display=$('dhcp').checked?'none':'block'}
-async function info(){try{var j=await(await fetch('/api/info',{headers:{'X-API-Key':$('cur').value.trim()}})).json();
- $('st').innerHTML='Mode: <b>'+(j.mode==='ap'?'setup (WiFi sendiri)':'tersambung')+'</b>'+(j.ap?' &middot; WiFi <span class="ap">'+j.ap+'</span>':'')+(j.ssid?' &middot; WiFi rumah: <b>'+j.ssid+'</b>':'')+(j.ip?' &middot; IP <b>'+j.ip+'</b>':'');
+function mode(){$('static').className=$('dhcp').checked?'grid hide':'grid'}
+async function info(){try{var j=await(await fetch('/api/info',{headers:{'X-API-Key':$('key').value.trim()}})).json();
+ var s='Mode: <b>'+(j.mode==='ap'?'setup (WiFi sendiri)':'tersambung')+'</b>';
+ if(j.ap)s+=' &middot; WiFi <span class="ap">'+j.ap+'</span>';
+ if(j.ssid)s+=' &middot; WiFi: <b>'+j.ssid+'</b>';
+ if(j.ip)s+=' &middot; IP <b>'+j.ip+'</b>';
+ $('st').innerHTML=s;
  if(j.ssid&&!$('ssid').value)$('ssid').value=j.ssid;
  if(j.ip_cfg&&!$('ip').value)$('ip').value=j.ip_cfg;
  if(j.gw&&!$('gw').value)$('gw').value=j.gw;
  if(j.mask&&!$('mask').value)$('mask').value=j.mask;
  if(j.dns&&!$('dns').value)$('dns').value=j.dns;
- $('dhcp').checked=j.dhcp!==false; mode();
- if(j.configured&&!j.ssid)$('cur').placeholder='isi kunci API untuk melihat setelan lama';
+ $('dhcp').checked=j.dhcp!==false;mode();
 }catch(e){$('st').textContent='Perangkat belum menjawab'}}
-async function scan(){say('Mencari WiFi...','work');try{var a=await(await fetch('/api/scan',{headers:{'X-API-Key':$('cur').value.trim()}})).json();
- $('wl').innerHTML=a.map(function(s){return '<option value="'+s+'">'}).join('');
- var i=0;a.forEach(function(s){if(i<1&&s)$('ssid').value=s});
- say(a.length?('Ditemukan '+a.length+' WiFi, pilih di daftar.':'Tidak ada WiFi ditemukan, tulis manual.'),'ok');
-}catch(e){say('Gagal mencari WiFi','err')}}
 async function save(){var b={ssid:$('ssid').value.trim(),pass:$('pass').value,dhcp:$('dhcp').checked,ip:$('ip').value.trim(),gw:$('gw').value.trim(),mask:$('mask').value.trim(),dns:$('dns').value.trim(),api_key:$('key').value.trim()};
  var x=$('sec');if(x)b.open_sec=+x.value;
  $('sv').disabled=true;say('Menyimpan...','work');
- try{var r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-API-Key':$('cur').value.trim()},body:JSON.stringify(b)});
+ try{var r=await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json','X-API-Key':$('key').value.trim()},body:JSON.stringify(b)});
   var j=await r.json();
-  if(j.ok){say('Tersimpan. Perangkat restart dan tersambung ke WiFi rumah...','ok');setTimeout(function(){location.reload()},8000)}
+  if(j.ok){say('Tersimpan. Perangkat restart dan tersambung ke WiFi...','ok');setTimeout(function(){location.reload()},10000)}
   else{say('Gagal: '+(j.error||r.status),'err');$('sv').disabled=false}
  }catch(e){say('Gagal mengirim: '+(e.message||e),'err');$('sv').disabled=false}}
 mode();info();
@@ -511,14 +495,13 @@ String pageHtml() {
   pg.replace("%FW%", FW_VER);
   pg.replace("%BOARD%", "ESP32 PLTS");
   pg.replace("%AP%", apName);
-  pg.replace("%OPENFIELD%", "");                 // ESP32 tidak punya pengaturan pintu
-  pg.replace("%OPEN%", "");
+  pg.replace("%OPENFIELD%", "");          // ESP32 tidak punya pengaturan pintu
   return pg;
 }
 
-// Kunci API: perangkat baru (belum ada kunci) boleh diatur siapa saja; setelah ada kunci,
-// permintaan harus memakai kunci itu (header X-API-Key atau parameter key).
+// >>> Dalam mode setup, akses fisik dianggap otorisasi (bisa simpan tanpa kunci lama).
 bool cfgAuth() {
+  if (portalMode) return true;
   if (!cfg.apiKey.length()) return true;
   return server.header("X-API-Key") == cfg.apiKey || server.arg("key") == cfg.apiKey;
 }
@@ -538,8 +521,8 @@ bool connectWifi() {
 void startPortal() {
   if (portalMode) return;
   portalMode = true; lastStaTry = millis();
-  WiFi.mode(WIFI_AP_STA);                        // AP untuk pengaturan, STA untuk mencoba WiFi rumah terus
-  WiFi.softAP(apName.c_str());                   // tanpa password: dipakai sebentar saat mengisi pengaturan
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.softAP(apName.c_str());
   IPAddress a = WiFi.softAPIP();
   Serial.printf("\n[%s] Mode setup aktif: sambungkan HP ke WiFi \"%s\", buka http://%s\n", FW_VER, apName.c_str(), a.toString().c_str());
 }
@@ -552,7 +535,7 @@ void stopPortal() {
   Serial.printf("[%s] Terhubung ke WiFi \"%s\", mode setup dimatikan. IP: %s\n", FW_VER, cfg.ssid.c_str(), WiFi.localIP().toString().c_str());
 }
 
-// ---------- Route halaman pengaturan ----------
+// ---------- Route ----------
 void hPage() { server.send(200, "text/html; charset=utf-8", pageHtml()); }
 
 void hInfo() {
@@ -582,6 +565,7 @@ void hScan() {
   server.send(200, "application/json", j);
 }
 
+// >>> PERBAIKAN: beri jeda sebelum restart supaya respons HTTP terkirim tuntas
 void hConfig() {
   if (!cfgAuth()) { server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
   String body = server.arg("plain");
@@ -606,7 +590,7 @@ void hConfig() {
   }
 
   if (ssid.length()) cfg.ssid = ssid;
-  if (jsonHas(body, "pass")) cfg.pass = pass;              // password hanya diganti kalau memang dikirim
+  if (jsonHas(body, "pass")) cfg.pass = pass;
   if (key.length()) cfg.apiKey = key;
   cfg.dhcp = dhcp;
   if (ip.length()) cfg.ip.fromString(ip);
@@ -621,10 +605,11 @@ void hConfig() {
   Serial.printf("[%s] Pengaturan disimpan: WiFi \"%s\", IP %s, kunci API %s\n",
                 FW_VER, cfg.ssid.c_str(), cfg.dhcp ? "DHCP" : cfg.ip.toString().c_str(), cfg.apiKey.c_str());
   server.send(200, "application/json", String("{\"ok\":true,\"saved\":\"") + cfg.ssid + "\"}");
-  otaRestartAt = millis() + 1500;                          // jawab dulu, baru restart dengan pengaturan baru
+
+  delay(400);                       // beri waktu TCP stack mengirim respons
+  otaRestartAt = millis() + 2500;   // restart total ~2.9 detik setelah respons
 }
 
-// Dipakai tombol "Mode setup" di web Termux: perangkat menyalakan WiFi sendiri sekarang
 void hPortalNow() {
   if (!cfgAuth()) { server.send(401, "application/json", "{\"ok\":false,\"error\":\"unauthorized\"}"); return; }
   server.send(200, "application/json", String("{\"ok\":true,\"ap\":\"") + apName + "\",\"url\":\"http://192.168.4.1\"}");
@@ -632,19 +617,15 @@ void hPortalNow() {
 }
 
 void setup() {
-  // Keluaran pendamping dulu (supaya setRelay(0,false) langsung menyalakan GPIO 13 & mematikan GPIO 12)
   pinMode(PIN_AUX_ON, OUTPUT);
   pinMode(PIN_AUX_OFF, OUTPUT);
   pinMode(PIN_DHT, INPUT_PULLUP);
-  // Relay: pastikan OFF sedini mungkin saat boot
   for (int i = 0; i < NR; i++) { pinMode(relays[i].pin, OUTPUT); setRelay(i, false); }
   Serial.begin(115200);
 
   analogReadResolution(12);
-  analogSetAttenuation(ADC_11db);          // rentang ~0.15 - 3.1 V
+  analogSetAttenuation(ADC_11db);
 
-  // Pengaturan jaringan dibaca dari flash. Belum pernah diisi, atau tombol BOOT ditahan saat
-  // menyala -> masuk mode setup: WiFi sendiri + halaman pengaturan di http://192.168.4.1
   pinMode(PIN_BTN, INPUT_PULLUP);
   cfgLoad();
   {
@@ -663,14 +644,14 @@ void setup() {
 
   const char* hdr[] = {"X-API-Key"};
   server.collectHeaders(hdr, 1);
-  server.on("/", HTTP_GET, hPage);                          // halaman pengaturan (nama WiFi, IP, kunci API)
+  server.on("/", HTTP_GET, hPage);
   server.on("/api/info", HTTP_GET, hInfo);
   server.on("/api/scan", HTTP_GET, hScan);
-  server.on("/api/config", HTTP_POST, hConfig);             // dipakai halaman ini & web Termux
-  server.on("/api/portal", HTTP_POST, hPortalNow);          // masuk mode setup dari web Termux
+  server.on("/api/config", HTTP_POST, hConfig);
+  server.on("/api/portal", HTTP_POST, hPortalNow);
   server.on("/api/data", HTTP_GET, hData);
   server.on("/api/relay", HTTP_POST, hRelay);
-  server.on("/api/ota", HTTP_POST, hOta, hOtaUpload);   // update firmware dari server (OTA)
+  server.on("/api/ota", HTTP_POST, hOta, hOtaUpload);
   server.begin();
 
   xTaskCreatePinnedToCore(sensorTask, "sensor", 6144, NULL, 1, NULL, 1);
@@ -679,10 +660,8 @@ void setup() {
 void loop() {
   server.handleClient();
   const uint32_t now = millis();
-  // OTA selesai atau pengaturan baru disimpan -> restart supaya setelan baru dipakai
   if (otaRestartAt && (int32_t)(now - otaRestartAt) >= 0) ESP.restart();
 
-  // Tombol BOOT ditahan 3 detik -> mode setup (untuk mengganti WiFi tanpa cabut alat)
   if (digitalRead(PIN_BTN) == LOW) {
     if (!btnHeld) btnHeld = now;
     else if (now - btnHeld > 3000) { btnHeld = 0; startPortal(); }
@@ -691,7 +670,6 @@ void loop() {
   if (WiFi.status() == WL_CONNECTED) wifiOkAt = now;
 
   if (portalMode) {
-    // WiFi rumah tetap dicoba tiap 20 detik; portal menutup sendiri begitu tersambung
     if (cfg.ssid.length() && now - lastStaTry > 20000) { lastStaTry = now; WiFi.begin(cfg.ssid.c_str(), cfg.pass.c_str()); }
     if (WiFi.status() == WL_CONNECTED) stopPortal();
   } else {
@@ -700,9 +678,8 @@ void loop() {
       lastCheck = now;
       if (WiFi.status() != WL_CONNECTED) WiFi.reconnect();
     }
-    // WiFi rumah hilang lebih dari 2 menit -> nyalakan mode setup supaya masih bisa diatur
     if (WiFi.status() != WL_CONNECTED && cfg.ssid.length() && wifiOkAt && now - wifiOkAt > 120000UL) startPortal();
-    if (now - wifiOkAt > 600000UL) ESP.restart();   // WiFi putus > 10 menit -> restart
+    if (now - wifiOkAt > 600000UL) ESP.restart();
   }
   delay(2);
 }
