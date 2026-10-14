@@ -14,7 +14,7 @@ const response = () => ({ code: 200, status(n) { this.code = n; return this; }, 
 
 function passwordVerifier() {
     // Exercise the actual callback passed by server.js, including the login attempt limiter.
-    const body = source('server.js').split('verifyDashboardPassword(req, res) {')[1].split('\n} });')[0];
+    const body = source('server.js').split('function verifyDashboardPassword(req, res) {')[1].split('\n}\n')[0];
     const env = { ADMIN_PASSWORD: PASSWORD };
     const fails = new Map();
     const sha = s => crypto.createHash('sha256').update(String(s)).digest();

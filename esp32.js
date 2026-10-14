@@ -40,8 +40,11 @@ module.exports = ({ app, broadcast, notify }) => {
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, zeroing = null, timer = null;
     const hist = [], cnt = {}, act = {}, lastMsg = {};
-    const labels = E('RELAY_LABELS', '').split(',').map(s => s.trim());
+    // Nama relay dibaca saat dipakai, jadi perubahan RELAY_LABELS dari web langsung terlihat
+    const labels = () => E('RELAY_LABELS', '').split(',').map(s => s.trim());
     const base = () => `http://${E('ESP32_IP', '')}:${N('ESP32_PORT', 80)}`;
+    const target = () => base();        // alamat yang sedang dipantau (untuk memutuskan perlu log ulang)
+    let lastTarget = '';
 
     async function call(p, method = 'GET') {
         const r = await fetch(base() + p, { method, headers: { 'X-API-Key': E('ESP32_API_KEY', '') }, signal: AbortSignal.timeout(2500) });
@@ -131,7 +134,7 @@ module.exports = ({ app, broadcast, notify }) => {
             current: c.current || null,
             dht: dhtOf(raw),
             aux: (raw && raw.aux) || null,   // GPIO pendamping Relay 1 & 2 (GPIO 12 = ON, GPIO 13 = OFF)
-            relays: (raw ? raw.relays : []).map((r, i) => ({ ...r, name: labels[i] || r.name })),
+            relays: (raw ? raw.relays : []).map((r, i) => ({ ...r, name: labels()[i] || r.name })),
             alerts: Object.entries(act).map(([key, a]) => ({ key, ...a })),
             cal, zeroing: !!zeroing,
             limits: { iWarn: N('I_WARN_A', 5) }
@@ -225,10 +228,26 @@ module.exports = ({ app, broadcast, notify }) => {
         res.json({ success: true, message: T('esp.calSaved') });
     });
 
-    return {
-        snapshot,
-        setRelay,
-        start() { if (!E('ESP32_IP', '')) console.log('[ESP32] ESP32_IP belum diisi di .env'); poll(); },
-        stop() { clearTimeout(timer); }
-    };
+    function stop() { clearTimeout(timer); timer = null; }
+
+    // Dipanggil saat aplikasi dijalankan dan setelah pengaturan diubah dari web: mulai/ulangi
+    // pemantauan dengan IP, port, kunci API, dan interval yang sedang berlaku. Tanpa IP,
+    // pemantauan tidak jalan (dashboard menampilkan perangkat offline).
+    function start() {
+        stop();
+        if (!E('ESP32_IP', '')) { console.log('[ESP32] Alamat ESP32 belum diisi (isi dari web: Pengaturan > ESP32).'); return; }
+        if (target() === lastTarget) return poll();
+        lastTarget = target();
+        console.log(`[ESP32] Memantau http://${E('ESP32_IP', '')}:${N('ESP32_PORT', 80)} tiap ${N('ESP32_POLL_MS', 1000)} ms`);
+        poll();
+    }
+
+    // Ulangi pemantauan tanpa menunggu siklus berikutnya (dipakai settings.js & setup.js)
+    function reload() {
+        online = false; everOnline = false; fails = 0;
+        start();
+        push();
+    }
+
+    return { snapshot, setRelay, start, reload, stop };
 };

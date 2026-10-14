@@ -521,6 +521,9 @@
                         </div>
                     </div>
 
+                    <!-- Kartu Perangkat & Integrasi (diisi settings.js): ESP32, ESP8266, Telegram, akun, server, monitoring -->
+                    <div id="settings-root"></div>
+
                     <div class="card" id="term-card">
                         <div class="head" style="margin-bottom:6px">
                             <span class="mut" data-i18n="term.title">Terminal</span>
@@ -549,6 +552,7 @@
                         <div class="tm-off" id="term-offmsg" hidden data-i18n="term.offMsg">Terminal sedang dimatikan.</div>
                         <p class="dr-hint" style="margin-top:12px" data-i18n="term.warn">Hati-hati.</p>
                     </div>
+
                 </div>
             </section>
         </main>
@@ -725,6 +729,7 @@
             if (tab === 'system' && window.loadSystem) loadSystem();
             if (window.fwOpen && window.fwClose) { tab === 'firmware' ? fwOpen() : fwClose(); }
             if (tab === 'settings' && window.loadTerminal) loadTerminal();
+            if (tab === 'settings' && window.loadSettings) loadSettings();
             if (window.innerWidth < 768) document.getElementById('sidebar').classList.add('-translate-x-full');
         }
 
@@ -1303,8 +1308,14 @@
                 .replace(/'/g, "&#039;");
         }
 
-        // Sudah login (cookie sesi masih berlaku)? langsung masuk tanpa login ulang
-        fetch('/api/session').then(r => r.json()).then(d => { if (d.authenticated) initAppShell(); }).catch(() => { });
+        // Setup awal belum selesai (belum ada akun admin)? buka halaman panduan setup.
+        // Kalau sudah, lanjut seperti biasa: cookie sesi masih berlaku -> langsung masuk.
+        fetch('/api/setup/status').then(r => r.json()).then(d => {
+            if (d.required && !d.authed) { location.replace('/setup.html'); return; }
+            return fetch('/api/session').then(r => r.json()).then(s => { if (s.authenticated) initAppShell(); });
+        }).catch(() => {
+            fetch('/api/session').then(r => r.json()).then(d => { if (d.authenticated) initAppShell(); }).catch(() => { });
+        });
     </script>
     <script src="ui.js"></script>
     <script src="monitor.js"></script>
@@ -1313,5 +1324,6 @@
     <script src="system.js"></script>
     <script src="firmware.js"></script>
     <script src="terminal.js"></script>
+    <script src="settings.js"></script>
 </body>
 </html>

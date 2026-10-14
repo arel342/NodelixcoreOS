@@ -7,6 +7,8 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 ## Fitur
 
 * Web server berbasis Node.js dan Express
+* Setup awal lewat browser (buat akun admin, isi port ESP32/ESP8266, dan bot Telegram)
+* Pengaturan lewat web: semua isi `.env` bisa diubah dari tab Pengaturan (tanpa edit file di Termux)
 * Login administrator
 * File manager berbasis web
 * Upload dan download file
@@ -21,6 +23,8 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Terminal perintah melalui web (dapat dimatikan di Pengaturan)
 * Integrasi ESP32
 * Integrasi ESP8266/ESP lock door
+* Mode setup di ESP32 & ESP8266: perangkat menyalakan WiFi sendiri, pengaturan
+  (nama WiFi, password WiFi, IP, kunci API) diisi dari halaman web di `192.168.4.1`
 * Update firmware ESP8266 & ESP32 lewat file `.bin` (OTA dari web atau menu Termux)
 * WebSocket untuk komunikasi real-time
 * Sistem notifikasi
@@ -49,8 +53,10 @@ Flash disk yang terpasang dideteksi otomatis, jadi ID/nama mount tidak perlu diu
 ## Struktur Project
 
 ```text
-server8/
+NodelixcoreOS/
 ├── server.js
+├── settings.js          <- pengaturan lewat web (ESP32, ESP8266, Telegram, akun, monitoring)
+├── setup.js             <- setup awal (halaman /setup.html)
 ├── esp32.js
 ├── door.js
 ├── firmware.js
@@ -68,8 +74,14 @@ server8/
 ├── README.md
 ├── data/
 │   └── calibration.json
+├── frimware/
+│   ├── esp32 server sensor.ino
+│   └── esp8266 lock door.ino
 └── public/
     ├── index.html
+    ├── setup.html       <- halaman panduan setup pertama kali
+    ├── setup.js
+    ├── settings.js      <- kartu pengaturan di tab Pengaturan
     ├── monitor.js
     ├── monitor.css
     ├── door.js
@@ -162,26 +174,102 @@ Jalankan:
 npm start
 ```
 
-## ESP32
+Setelah jalan, terminal menampilkan alamat server, mis.:
 
-Konfigurasi ESP32 dilakukan melalui `.env`:
-
-```env
-ESP32_IP=SESUAIKAN_DENGAN_IP_DI_FRIMWARE
-ESP32_PORT=80
-ESP32_API_KEY=CHANGE_THIS_ESP32_API_KEY
+```text
+=================================
+Setup awal: http://192.168.1.20:3000/setup.html
+- Buka alamat itu di HP/PC (satu WiFi dengan Termux).
+- Di halaman setup: buat username & password, isi IP/port/kunci API ESP32
+  dan ESP8266, lalu isi bot Telegram. .env diisi otomatis.
+=================================
 ```
 
-Pastikan ESP32 dan server berada pada jaringan yang sama serta IP, port, dan API key sesuai.
+## Setup Awal (lewat browser)
 
-## Door Lock
+`.env` tidak perlu diisi manual. Saat pertama kali dijalankan, semua permintaan
+diarahkan ke halaman panduan `/setup.html` sampai ada akun admin. Langkahnya:
 
-Contoh konfigurasi:
+1. **Akun admin** — buat username dan password untuk login dashboard.
+2. **Alamat web server** — IP Termux + port ditampilkan otomatis (port bisa diubah di sini).
+3. **ESP32 (monitor PLTS)** — isi IP, port, dan kunci API. Tekan **Acak** untuk membuat kunci API
+   baru, lalu salin kunci itu ke halaman pengaturan ESP32 (lihat bagian ESP32 di bawah).
+4. **ESP8266 (pintu RFID)** — sama seperti ESP32: IP, port, dan kunci API.
+5. **Bot Telegram (opsional)** — tempel token bot dari @BotFather dan Chat ID admin,
+   lalu tekan **Kirim pesan uji** untuk memastikan bot bekerja.
+6. **Selesai** — layanan perangkat dijalankan dan admin langsung masuk dashboard.
+
+Panduan ini bisa dibuka lagi kapan saja dari tab **Pengaturan** (kartu paling atas,
+tombol **Buka panduan**).
+
+> Pengamanan: selesaikan setup segera setelah server dijalankan pertama kali. Selama
+> belum ada akun admin, siapa pun yang bisa membuka alamat server dapat membuat akun itu.
+
+## Pengaturan lewat web
+
+Tab **Pengaturan** di dashboard berisi kartu yang mengubah isi `.env` langsung dari browser —
+tidak perlu lagi membuka Termux:
+
+| Kartu | Yang bisa diubah |
+| --- | --- |
+| ESP32 | IP, port, kunci API, interval pemantauan, nama relay. Ada tombol **Uji koneksi**, **Kirim pengaturan ke perangkat**, dan **Mode setup (WiFi ESP)** |
+| ESP8266 (pintu) | IP, port, kunci API, interval pemantauan, waktu tambah kartu, notifikasi Telegram |
+| Bot Telegram | Aktif/nonaktif notifikasi, token bot, Chat ID admin |
+| Akun admin | Username, password (perlu password yang sedang dipakai) |
+| Server & Web | Port web, masa berlaku login, folder penyimpanan, batas firmware OTA |
+| Batas alarm monitoring | Ambang tegangan sel, arus, estimasi daya AC |
+
+Perubahan langsung dipakai proses yang berjalan (pemantauan perangkat dan bot Telegram
+dimuat ulang sendiri); hanya **port web** yang berlaku setelah `npm start` dijalankan ulang.
+
+## ESP32
+
+Firmware ESP32 versi 1.3 ke atas **tidak lagi menyimpan WiFi/API key di file `.ino`**. Semua
+pengaturan diisi dari halaman web perangkat:
+
+1. Nyalakan ESP32. Kalau WiFi-nya belum pernah diisi, perangkat menyalakan WiFi sendiri
+   bernama `Nodelix-ESP32-xxxx`.
+2. Sambungkan HP ke WiFi itu (tanpa password), lalu buka `http://192.168.4.1`.
+3. Isi **nama WiFi, password WiFi, IP (DHCP atau statis), dan kunci API** — kunci API harus sama
+   dengan `ESP32_API_KEY` di web Termux (bisa pakai tombol **Acak** di halaman setup Termux,
+   lalu salin ke sini).
+4. Simpan: perangkat restart dan tersambung ke WiFi rumah. Kartu di dashboard akan menunjukkan
+   ESP32 online, firmware, IP, dan RSSI.
+
+Mengubah pengaturan lagi nanti:
+
+* Tahan tombol **BOOT** di ESP32 selama 3 detik → mode setup menyala lagi, **atau**
+* dari web Termux: **Pengaturan > ESP32 > Mode setup (WiFi ESP)**, **atau**
+* **Pengaturan > ESP32 > Kirim pengaturan ke perangkat** untuk mengirim WiFi/IP/kunci API baru
+  lewat jaringan (tanpa menekan tombol apa pun).
+
+Catatan:
+
+* WiFi rumah hilang lebih dari 2 menit → mode setup menyala sendiri; begitu WiFi rumah
+  tersambung, mode setup tertutup otomatis.
+* Pengaturan disimpan di flash (NVS), jadi tetap ada setelah listrik mati.
+* Kalau kunci API di kedua sisi berbeda, dashboard menampilkan ESP32 offline (server dapat
+  balasan 401). Samakan kuncinya lewat mode setup di atas — kolom **Kunci di perangkat saat ini**
+  di kartu push berguna kalau kunci di `.env` sudah berubah duluan.
+
+## Door Lock (ESP8266)
+
+Sama seperti ESP32: WiFi, IP, dan kunci API diisi dari halaman web perangkat (folder
+`frimware/esp8266 lock door.ino`, firmware 1.3 ke atas).
+
+1. Nyalakan ESP8266. Kalau belum pernah diatur, LCD menampilkan **Mode setup** dan perangkat
+   menyalakan WiFi `Nodelix-DOOR-xxxx`.
+2. Sambungkan HP ke WiFi itu, buka `http://192.168.4.1`.
+3. Isi nama WiFi, password WiFi, IP (DHCP/statis), kunci API (samakan dengan `DOOR_API_KEY`),
+   dan waktu relay terbuka, lalu simpan. Perangkat restart dan tersambung ke WiFi rumah.
+4. Kartu RFID, LCD, dan relay tetap bekerja normal selama mode setup.
+
+Untuk mengubah lagi: tahan tombol **FLASH/BOOT** 3 detik saat perangkat menyala (mode setup),
+atau pakai **Pengaturan > Pintu RFID** di web Termux (Mode setup / Kirim pengaturan ke perangkat).
+
+Nilai lain (masih bisa diatur dari web **Pengaturan > Pintu RFID** atau `.env`):
 
 ```env
-DOOR_IP=SESUAIKAN_DENGAN_IP_DI_FRIMWARE
-DOOR_PORT=80
-DOOR_API_KEY=CHANGE_THIS_DOOR_API_KEY
 DOOR_ENROLL_SECONDS=30
 DOOR_POLL_MS=1000
 DOOR_NOTIFY_OPEN=false
@@ -190,13 +278,17 @@ DOOR_NOTIFY_UNKNOWN=false
 
 ## Telegram
 
-Jika Telegram digunakan:
+Token bot dan Chat ID diisi dari **Pengaturan > Bot Telegram** (atau saat setup awal) dan
+disimpan ke `.env`:
 
 ```env
 TELEGRAM_ALERTS=true
 TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 ```
+
+Setelah disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
+**Kirim pesan uji** memastikan token dan Chat ID benar.
 
 `TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
@@ -406,6 +498,16 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
   * Relay 4 ➔ `GPIO 32`
 * **module DHT11**:
   *DHT11 ➔ 'GPIO 4'
+
+### Tombol mode setup (WiFi sendiri)
+
+* **ESP32**: tombol **BOOT** (GPIO 0) — tahan 3 detik saat perangkat menyala untuk masuk
+  mode setup, atau tahan saat perangkat sedang jalan lalu lepaskan.
+* **ESP8266**: tombol **FLASH** (GPIO 0 / D3) — tahan 3 detik saat perangkat sudah menyala
+  (kalau ditahan saat menyalakan, ESP masuk mode flash USB, bukan mode setup).
+
+Di mode setup kedua perangkat menyalakan WiFi tanpa password (`Nodelix-ESP32-xxxx` /
+`Nodelix-DOOR-xxxx`) dan halaman pengaturan di `http://192.168.4.1`.
 
 ### Kartu admin pintu RFID
 

@@ -2,12 +2,15 @@ const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d 
 const WAIT_MS = 5000;
 
 module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
-    const token = E('TELEGRAM_BOT_TOKEN', '');
-    const chatId = E('TELEGRAM_CHAT_ID', '');
+    // Token & chat ID dibaca saat dipakai, supaya perubahan dari web (Pengaturan > Telegram)
+    // langsung berlaku tanpa menjalankan ulang server.
+    const token = () => E('TELEGRAM_BOT_TOKEN', '');
+    const chatId = () => E('TELEGRAM_CHAT_ID', '');
     let offset = 0, running = false, timer = null;
+    let offReason = '';                       // supaya pesan "dinonaktifkan" tidak berulang
 
     async function api(method, body = {}, timeout = 35000) {
-        const r = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+        const r = await fetch(`https://api.telegram.org/bot${token()}/${method}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -18,10 +21,21 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
         return data.result;
     }
 
-    async function send(text, target = chatId) {
-        if (!token || !target) return false;
-        await api('sendMessage', { chat_id: target, text });
+    async function send(text, target) {
+        const chat = target || chatId();
+        if (!token() || !chat) return false;
+        await api('sendMessage', { chat_id: chat, text });
         return true;
+    }
+
+    // Kirim pesan uji (dipakai tombol "Kirim pesan uji" di Pengaturan > Telegram)
+    async function test(text) {
+        if (!token()) return { ok: false, error: 'TELEGRAM_BOT_TOKEN belum diisi' };
+        if (!chatId()) return { ok: false, error: 'TELEGRAM_CHAT_ID belum diisi' };
+        try {
+            await api('sendMessage', { chat_id: chatId(), text: text || '🔔 Pesan uji NodelixcoreOS.' }, 12000);
+            return { ok: true };
+        } catch (e) { return { ok: false, error: e.message }; }
     }
 
     const help = [
@@ -149,10 +163,10 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
                 offset = update.update_id + 1;
                 const message = update.message;
                 if (!message || !message.text || !message.chat || message.chat.type !== 'private') continue;
-                if (String(message.chat.id) !== chatId) {
-                    console.warn(chatId
+                if (String(message.chat.id) !== chatId()) {
+                    console.warn(chatId()
                         ? `[Telegram] Perintah diabaikan dari chat yang tidak diizinkan (${message.chat.id}).`
-                        : `[Telegram] Isi TELEGRAM_CHAT_ID=${message.chat.id} di .env untuk mengizinkan bot bagi chat pribadi ini.`);
+                        : `[Telegram] Isi TELEGRAM_CHAT_ID=${message.chat.id} (web: Pengaturan > Telegram) untuk mengizinkan bot bagi chat pribadi ini.`);
                     continue;
                 }
                 await command(message);
@@ -164,18 +178,24 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
     }
 
     async function start() {
-        if (!token) {
-            console.log('[Telegram] Bot dinonaktifkan: TELEGRAM_BOT_TOKEN belum diisi.');
-            return;
+        if (!token()) {
+            // Cukup sekali sampai token diisi: boot, setup awal, dan ganti pengaturan
+            // sama-sama memanggil start(), pesannya jangan menumpuk di log Termux.
+            if (offReason !== 'token') {
+                offReason = 'token';
+                console.log('[Telegram] Bot dinonaktifkan: token bot belum diisi (isi dari web: Pengaturan > Telegram).');
+            }
+            return false;
         }
-        if (!chatId) console.warn('[Telegram] Isi TELEGRAM_CHAT_ID dengan ID chat Telegram pribadi admin sebelum memakai bot.');
+        offReason = '';
+        if (!chatId()) console.warn('[Telegram] Isi Chat ID Telegram dengan ID chat pribadi admin sebelum memakai bot.');
         try {
             const pending = await api('getUpdates', { timeout: 0, allowed_updates: ['message'] }, 8000);
             if (pending.length) {
                 offset = pending[pending.length - 1].update_id + 1;
-                if (!chatId) {
+                if (!chatId()) {
                     const ids = [...new Set(pending.map(u => u.message).filter(m => m && m.chat && m.chat.type === 'private').map(m => m.chat.id))];
-                    if (ids.length) console.log(`[Telegram] Isi TELEGRAM_CHAT_ID di .env dengan salah satu ID chat pribadi ini: ${ids.join(', ')}`);
+                    if (ids.length) console.log(`[Telegram] Isi Chat ID (web: Pengaturan > Telegram) dengan salah satu ID chat pribadi ini: ${ids.join(', ')}`);
                 }
             }
         } catch (e) {
@@ -183,20 +203,36 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
         }
         running = true;
         poll();
+        return true;
+    }
+
+    function stop() {
+        running = false;
+        clearTimeout(timer);
+        timer = null;
+    }
+
+    // Dipakai setelah pengaturan Telegram diubah dari web: hentikan polling lama, mulai lagi
+    // dengan token/chat ID baru (tanpa menjalankan ulang server).
+    async function restart() {
+        stop();
+        offset = 0;
+        try { return await start(); }
+        catch (e) { console.error('[Telegram] Gagal memulai ulang bot:', e.message); return false; }
     }
 
     return {
         start,
+        restart,
+        test,
         welcome() {
-            if (!token || !chatId) return Promise.resolve(false);
+            if (!token() || !chatId()) return Promise.resolve(false);
             return send('👋 Selamat datang di NodelixcoreOS!\n✅ Bot siap. Gunakan /help untuk melihat perintah yang tersedia.').catch(e => {
                 console.error('[Telegram] Gagal mengirim pesan sambutan:', e.message);
                 return false;
             });
         },
-        stop() {
-            running = false;
-            clearTimeout(timer);
-        }
+        stop,
+        isRunning: () => running
     };
 };

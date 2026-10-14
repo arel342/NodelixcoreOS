@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setup awal NodelixcoreOS</title>
+<script src="i18n.js"></script>
+<style>
+    :root {
+        --ink: #0b1a30; --ink2: #16304f; --amber: #f5a524; --ok: #16a34a; --bad: #dc2626;
+        --line: #dbe2ee; --mut: #6b7a94; --bg: #eef2f8;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    body {
+        margin: 0; min-height: 100vh; background: var(--bg); color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 15px;
+    }
+    .wrap { max-width: 560px; margin: 0 auto; padding: 18px 16px 40px; }
+    .brand { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 2px 16px; }
+    .brand b { font-size: 19px; letter-spacing: .3px; }
+    .brand span { display: block; font-size: 12px; color: var(--mut); }
+    .logo {
+        width: 40px; height: 40px; border-radius: 12px; background: var(--ink); color: #fff;
+        display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 17px;
+    }
+    .langs { display: flex; gap: 4px; }
+    .langs button {
+        border: 1px solid var(--line); background: #fff; color: var(--mut); border-radius: 9px;
+        padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
+    }
+    .langs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .sub { font-size: 12.5px; color: var(--mut); line-height: 1.6; margin: -8px 2px 14px; }
+    .bars { display: flex; gap: 6px; margin-bottom: 14px; }
+    .bars i { flex: 1; height: 5px; border-radius: 4px; background: #d9e1ee; transition: background .3s; }
+    .bars i.on { background: var(--amber); }
+    .card { background: #fff; border: 1px solid var(--line); border-radius: 18px; padding: 20px; }
+    .card h2 { margin: 0 0 6px; font-size: 19px; }
+    .card p.lead { margin: 0 0 16px; color: var(--mut); font-size: 13.5px; line-height: 1.55; }
+    .step-of { font-size: 11.5px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; color: var(--amber); margin-bottom: 6px; }
+    label.f { display: block; margin: 12px 0 0; font-size: 12.5px; font-weight: 600; color: #3d4b62; }
+    input[type=text], input[type=password], input[type=number] {
+        width: 100%; margin-top: 5px; padding: 11px 13px; border: 1.5px solid var(--line);
+        border-radius: 12px; font: inherit; font-size: 14.5px; color: var(--ink); background: #fbfcfe; outline: none;
+    }
+    input:focus { border-color: #8ab4e8; background: #fff; }
+    .row { display: flex; gap: 8px; align-items: flex-end; }
+    .row > *:first-child { flex: 1; }
+    .btn {
+        border: 0; border-radius: 12px; padding: 11px 16px; font: inherit; font-size: 14px; font-weight: 600;
+        cursor: pointer; background: var(--ink); color: #fff; white-space: nowrap;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn.ghost { background: #fff; color: var(--ink); border: 1.5px solid var(--line); }
+    .btn.amber { background: var(--amber); color: #3a2500; }
+    .btn.mini { padding: 11px 12px; font-size: 12.5px; }
+    .acts { display: flex; gap: 8px; margin-top: 20px; }
+    .acts .grow { flex: 1; }
+    .acts .btn { flex: 1; }
+    .hint { font-size: 12px; color: var(--mut); margin: 7px 0 0; line-height: 1.5; }
+    .note { background: #fff8e8; border: 1px solid #f6dfae; border-radius: 12px; padding: 12px 13px; margin-top: 14px; font-size: 12.5px; }
+    .note b { display: block; margin-bottom: 5px; }
+    .note ol { margin: 0; padding-left: 18px; line-height: 1.65; }
+    .kv { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--line); font-size: 13.5px; }
+    .kv:last-child { border-bottom: 0; }
+    .kv b { text-align: right; font-weight: 600; word-break: break-all; }
+    .kv span { color: var(--mut); }
+    .msg { margin-top: 14px; font-size: 13px; font-weight: 600; border-radius: 12px; padding: 11px 13px; display: none; }
+    .msg.ok { display: block; background: #e6f7ec; color: #166534; }
+    .msg.err { display: block; background: #fdeaea; color: #991b1b; }
+    .sw { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+    .sw input { width: 20px; height: 20px; accent-color: var(--amber); }
+    .sw label { font-size: 13.5px; font-weight: 600; color: #3d4b62; }
+    .addr { display: flex; gap: 8px; align-items: center; background: #f4f7fc; border: 1px solid var(--line); border-radius: 12px; padding: 11px 13px; margin-top: 6px; font-size: 14px; font-weight: 600; }
+    .addr span { flex: 1; word-break: break-all; }
+    .addr button { border: 0; background: transparent; color: #2f78be; font: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+    .done-ic { width: 54px; height: 54px; border-radius: 16px; background: #e6f7ec; color: var(--ok); display: flex; align-items: center; justify-content: center; font-size: 26px; margin-bottom: 12px; }
+    .center { text-align: center; }
+    .hid { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+    <div class="brand">
+        <div style="display:flex;align-items:center;gap:11px">
+            <div class="logo">N</div>
+            <div><b>NodelixcoreOS</b><span data-i18n="wz.title">Setup awal NodelixcoreOS</span></div>
+        </div>
+        <div class="langs">
+            <button id="lg-id" onclick="wzLang('id')">ID</button>
+            <button id="lg-en" onclick="wzLang('en')">EN</button>
+            <button id="lg-zh" onclick="wzLang('zh')">中文</button>
+        </div>
+    </div>
+
+    <p class="sub" data-i18n="wz.sub"></p>
+
+    <div class="bars" id="bars"></div>
+
+    <!-- ============ LANGKAH 1: AKUN ADMIN ============ -->
+    <section class="card" id="st-1">
+        <div class="step-of" id="of-1"></div>
+        <h2 data-i18n="wz.s1t">Buat akun admin</h2>
+        <p class="lead" data-i18n="wz.s1d"></p>
+        <label class="f" data-i18n="wz.user">Username</label>
+        <input type="text" id="in-user" autocomplete="username" spellcheck="false" maxlength="32">
+        <label class="f" data-i18n="wz.pass">Password (min. 8 karakter)</label>
+        <input type="password" id="in-pass" autocomplete="new-password">
+        <label class="f" data-i18n="wz.confirm">Ulangi password</label>
+        <input type="password" id="in-confirm" autocomplete="new-password">
+        <div class="msg" id="msg-1"></div>
+        <div class="acts"><button class="btn amber grow" onclick="wzSaveAccount()" data-i18n="wz.saveNext">Simpan &amp; lanjut</button></div>
+    </section>
+
+    <!-- ============ LANGKAH 2: ALAMAT SERVER ============ -->
+    <section class="card hid" id="st-2">
+        <div class="step-of" id="of-2"></div>
+        <h2 data-i18n="wz.s2t">Alamat web server (Termux)</h2>
+        <p class="lead" data-i18n="wz.s2d"></p>
+        <label class="f" data-i18n="wz.addr">Alamat dashboard</label>
+        <div class="addr" id="addr-list"></div>
+        <label class="f" data-i18n="wz.portWeb">Port web</label>
+        <input type="number" id="in-port" min="1" max="65535">
+        <p class="hint" data-i18n="wz.s2hint"></p>
+        <div class="msg" id="msg-2"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn grow" onclick="wzSaveServer()" data-i18n="wz.saveNext">Simpan &amp; lanjut</button>
+        </div>
+    </section>
+
+    <!-- ============ LANGKAH 3: ESP32 ============ -->
+    <section class="card hid" id="st-3">
+        <div class="step-of" id="of-3"></div>
+        <h2 data-i18n="wz.s3t">ESP32 (monitor PLTS): IP, port &amp; kunci API</h2>
+        <p class="lead" data-i18n="wz.s3d"></p>
+        <label class="f" data-i18n="wz.ipDev">IP perangkat</label>
+        <input type="text" id="in-e32-ip" placeholder="192.168.1.50" spellcheck="false">
+        <label class="f" data-i18n="wz.portDev">Port web perangkat</label>
+        <input type="number" id="in-e32-port" min="1" max="65535" placeholder="80">
+        <label class="f" data-i18n="wz.apiKey">Kunci API (harus sama di kedua sisi)</label>
+        <div class="row">
+            <input type="text" id="in-e32-key" spellcheck="false" autocomplete="off">
+            <button class="btn ghost mini" type="button" onclick="wzGen('in-e32-key')" data-i18n="wz.gen">Acak</button>
+            <button class="btn ghost mini" type="button" onclick="wzCopy('in-e32-key')" data-i18n="wz.copy">Salin</button>
+        </div>
+        <div class="note">
+            <b data-i18n="wz.howEspTitle">Cara mengisi di perangkat ESP</b>
+            <ol>
+                <li data-i18n="wz.howEsp1"></li>
+                <li data-i18n="wz.howEsp2"></li>
+                <li data-i18n="wz.howEsp3"></li>
+                <li data-i18n="wz.howEsp4"></li>
+            </ol>
+        </div>
+        <div class="msg" id="msg-3"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn ghost" onclick="wzGo(1)" data-i18n="wz.skip">Lewati</button>
+            <button class="btn" onclick="wzSaveDevice('esp32')" data-i18n="wz.saveNext">Simpan &amp; lanjut</button>
+        </div>
+    </section>
+
+    <!-- ============ LANGKAH 4: ESP8266 (PINTU) ============ -->
+    <section class="card hid" id="st-4">
+        <div class="step-of" id="of-4"></div>
+        <h2 data-i18n="wz.s4t">ESP8266 (pintu RFID): IP, port &amp; kunci API</h2>
+        <p class="lead" data-i18n="wz.s4d"></p>
+        <label class="f" data-i18n="wz.ipDev">IP perangkat</label>
+        <input type="text" id="in-d-ip" placeholder="192.168.1.60" spellcheck="false">
+        <label class="f" data-i18n="wz.portDev">Port web perangkat</label>
+        <input type="number" id="in-d-port" min="1" max="65535" placeholder="80">
+        <label class="f" data-i18n="wz.apiKey">Kunci API (harus sama di kedua sisi)</label>
+        <div class="row">
+            <input type="text" id="in-d-key" spellcheck="false" autocomplete="off">
+            <button class="btn ghost mini" type="button" onclick="wzGen('in-d-key')" data-i18n="wz.gen">Acak</button>
+            <button class="btn ghost mini" type="button" onclick="wzCopy('in-d-key')" data-i18n="wz.copy">Salin</button>
+        </div>
+        <div class="note">
+            <b data-i18n="wz.howEspTitle">Cara mengisi di perangkat ESP</b>
+            <ol>
+                <li data-i18n="wz.howEsp1"></li>
+                <li data-i18n="wz.howEsp2"></li>
+                <li data-i18n="wz.howEsp3"></li>
+                <li data-i18n="wz.howEsp4"></li>
+            </ol>
+        </div>
+        <div class="msg" id="msg-4"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn ghost" onclick="wzGo(1)" data-i18n="wz.skip">Lewati</button>
+            <button class="btn" onclick="wzSaveDevice('esp8266')" data-i18n="wz.saveNext">Simpan &amp; lanjut</button>
+        </div>
+    </section>
+
+    <!-- ============ LANGKAH 5: TELEGRAM ============ -->
+    <section class="card hid" id="st-5">
+        <div class="step-of" id="of-5"></div>
+        <h2 data-i18n="wz.s5t">Bot Telegram (opsional)</h2>
+        <p class="lead" data-i18n="wz.s5d"></p>
+        <div class="sw">
+            <input type="checkbox" id="in-tg-alerts" checked>
+            <label for="in-tg-alerts" data-i18n="wz.tgAlerts">Aktifkan notifikasi Telegram</label>
+        </div>
+        <label class="f" data-i18n="wz.tgToken">Token bot (dari @BotFather)</label>
+        <input type="text" id="in-tg-token" spellcheck="false" autocomplete="off" placeholder="123456789:AA...">
+        <label class="f" data-i18n="wz.tgChat">Chat ID admin (angka)</label>
+        <input type="text" id="in-tg-chat" spellcheck="false" autocomplete="off" placeholder="123456789">
+        <p class="hint" data-i18n="wz.tgHow"></p>
+        <div class="acts">
+            <button class="btn ghost" type="button" onclick="wzTestTg()" id="btn-tgtest" data-i18n="wz.tgTest">Kirim pesan uji</button>
+        </div>
+        <div class="msg" id="msg-5"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn ghost" onclick="wzGo(1)" data-i18n="wz.skip">Lewati</button>
+            <button class="btn" onclick="wzSaveTg()" data-i18n="wz.saveNext">Simpan &amp; lanjut</button>
+        </div>
+    </section>
+
+    <!-- ============ LANGKAH 6: SELESAI ============ -->
+    <section class="card hid" id="st-6">
+        <div class="step-of" id="of-6"></div>
+        <div class="done-ic">✓</div>
+        <h2 data-i18n="wz.s6t">Selesai!</h2>
+        <p class="lead" data-i18n="wz.s6d"></p>
+        <div id="summary"></div>
+        <div class="msg" id="msg-6"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn amber grow" id="btn-finish" onclick="wzFinish()" data-i18n="wz.finish">Selesai &amp; buka dashboard</button>
+        </div>
+    </section>
+
+    <p class="hint" id="foot"></p>
+</div>
+
+<script src="ui.js"></script>
+<script src="setup.js"></script>
+</body>
+</html>

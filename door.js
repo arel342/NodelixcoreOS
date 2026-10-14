@@ -32,6 +32,8 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
     const lastMsg = {};
     const base = () => `http://${E('DOOR_IP', '')}:${N('DOOR_PORT', 80)}`;
+    const target = () => base();
+    let lastTarget = '';
     const configured = () => !!E('DOOR_IP', '');
 
     async function call(p, method = 'GET', body) {
@@ -284,17 +286,24 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         res.json({ success: true });
     });
 
-    return {
-        snapshot,
-        setEnabled,
-        open,
-        close,
-        enroll,
-        cancelEnroll,
-        start() {
-            if (!configured()) { console.log('[Pintu] DOOR_IP belum diisi di .env (modul pintu dinonaktifkan)'); return; }
-            poll();
-        },
-        stop() { clearTimeout(timer); }
-    };
+    function stop() { clearTimeout(timer); timer = null; }
+
+    // Dipanggil saat aplikasi dijalankan dan setelah pengaturan diubah dari web
+    // (IP/port/kunci API/interval baru langsung dipakai tanpa restart server).
+    function start() {
+        stop();
+        if (!configured()) { console.log('[Pintu] Alamat pintu belum diisi (isi dari web: Pengaturan > Pintu RFID).'); return; }
+        if (target() === lastTarget) return poll();
+        lastTarget = target();
+        console.log(`[Pintu] Memantau http://${E('DOOR_IP', '')}:${N('DOOR_PORT', 80)} tiap ${N('DOOR_POLL_MS', 1000)} ms`);
+        poll();
+    }
+
+    function reload() {
+        online = false; everOnline = false; fails = 0; enrollUntil = 0;
+        start();
+        push();
+    }
+
+    return { snapshot, setEnabled, open, close, enroll, cancelEnroll, start, reload, stop };
 };

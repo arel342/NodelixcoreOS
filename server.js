@@ -20,9 +20,10 @@ const env = (k, d = '') => (process.env[k] === undefined || process.env[k] === '
 function saveEnv(key, value) {
     let txt = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : '';
     const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    txt = re.test(txt) ? txt.replace(re, () => `${key}=${value}`) : txt + `\n${key}=${value}\n`;
+    if (re.test(txt)) txt = txt.replace(re, () => `${key}=${value}`);
+    else txt = txt.replace(/\s*$/, '') + (txt.trim() ? '\n' : '') + `${key}=${value}\n`;
     fs.writeFileSync(ENV_FILE, txt);
-    process.env[key] = value;
+    process.env[key] = value;   // langsung dipakai proses yang berjalan
 }
 
 const app = express();
@@ -43,11 +44,26 @@ const sha = s => crypto.createHash('sha256').update(String(s)).digest();
 const same = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
 
 function isAuthed(req) {
-    const m = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie || '');
-    const exp = m && sessions.get(m[1]);
+    const exp = sessions.get(sidOf(req));
     if (!exp) return false;
-    if (exp < Date.now()) { sessions.delete(m[1]); return false; }
+    if (exp < Date.now()) { sessions.delete(sidOf(req)); return false; }
     return true;
+}
+const sidOf = req => {
+    const m = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie || '');
+    return m ? m[1] : '';
+};
+// Buat sesi login baru (dipakai /api/login dan setelah setup awal selesai)
+function createSession(res) {
+    const sid = crypto.randomBytes(32).toString('hex');
+    sessions.set(sid, Date.now() + TTL);
+    res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(TTL / 1000)}`);
+    return sid;
+}
+// Setelah password diganti: sesi lain diputuskan, sesi yang sedang dipakai tetap jalan
+function keepOnly(req) {
+    const keep = sidOf(req);
+    for (const k of [...sessions.keys()]) if (k !== keep) sessions.delete(k);
 }
 const requireAuth = (req, res, next) => isAuthed(req) ? next() : res.status(401).json({ error: T('auth.notLoggedIn') });
 setInterval(() => { for (const [k, v] of sessions) if (v < Date.now()) sessions.delete(k); }, 600000).unref();
@@ -77,19 +93,32 @@ server.on('upgrade', (req, socket, head) => {
 });
 
 // ================= MIDDLEWARE =================
-app.use(express.json());
-// Bahasa aktif boleh dibaca sebelum login (halaman login ikut bahasa tersimpan)
-app.get('/api/settings/lang', (req, res) => res.json({ lang: env('LANGUAGE', 'id') }));
-// Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
+// ================= SETUP AWAL (wizard di browser) =================
+// Selama ADMIN_PASSWORD belum ada (mis. .env masih kosong), pengunjung diarahkan ke
+// /setup.html dan API lain ditutup: belum ada akun untuk login, dan halaman setup ini
+// yang membuat akun admin + pengaturan ESP32/ESP8266/Telegram.
+const setupRequired = () => !env('ADMIN_PASSWORD');
+app.get('/', (req, res, next) => setupRequired() ? res.redirect('/setup.html') : next());
+app.use((req, res, next) => {
+    if (!setupRequired()) return next();
+    if (req.path === '/api/settings/lang' || req.path === '/setup.html' || req.path.startsWith('/api/setup/')) return next();
+    if (req.path.startsWith('/api/')) return res.status(409).json({ error: T('setup.notDone'), setup: true, redirect: '/setup.html' });
+    next();
+});
 
-// Ganti bahasa web (disimpan ke .env, berlaku untuk semua tulisan termasuk pesan server)
+app.use(express.json());
+// Bahasa aktif boleh dibaca & diganti sebelum login: dipakai halaman login dan halaman
+// setup awal (dua-duanya harus bisa berganti bahasa walau belum ada akun).
+app.get('/api/settings/lang', (req, res) => res.json({ lang: env('LANGUAGE', 'id') }));
 app.post('/api/settings/lang', (req, res) => {
     const l = String((req.body || {}).lang || '');
     if (!T.DICT[l]) return res.status(400).json({ success: false, message: T('set.badLang') });
     saveEnv('LANGUAGE', l);
     res.json({ success: true, message: T('set.saved') });
 });
+// Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
+app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ================= API AUTH =================
@@ -108,17 +137,15 @@ app.post('/api/login', (req, res) => {
         return res.status(401).json({ success: false, message: T('auth.wrong') });
     }
     fails.delete(req.ip);
-    const sid = crypto.randomBytes(32).toString('hex');
-    sessions.set(sid, Date.now() + TTL);
-    res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(TTL / 1000)}`);
+    createSession(res);
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
 app.get('/api/session', (req, res) => res.json({ authenticated: isAuthed(req) }));
 
 app.post('/api/logout', (req, res) => {
-    const m = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie || '');
-    if (m) sessions.delete(m[1]);
+    const sid = sidOf(req);
+    if (sid) sessions.delete(sid);
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     res.json({ success: true });
 });
@@ -165,10 +192,10 @@ app.post('/api/reset-password', (req, res) => {
     res.json({ success: true, message: T('reset.ok') });
 });
 
-// ================= ESP32 MONITOR =================
-const esp32 = require('./esp32')({ app, broadcast, notify });
-// ================= PINTU RFID (ESP8266) =================
-const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword(req, res) {
+// Verifikasi ulang password login dashboard (kartu admin pintu + ubah akun dari web).
+// Percobaan salah dibatasi 5x per 5 menit per IP, sama seperti /api/login.
+// true = password benar; kalau salah, respons error sudah dikirim dan hasilnya false.
+function verifyDashboardPassword(req, res) {
     const f = fails.get(req.ip) || { n: 0, until: 0 };
     if (f.until > Date.now()) {
         res.status(429).json({ success: false, message: T('auth.tooMany') });
@@ -184,7 +211,12 @@ const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword
     }
     fails.delete(req.ip);
     return true;
-} });
+}
+
+// ================= ESP32 MONITOR =================
+const esp32 = require('./esp32')({ app, broadcast, notify });
+// ================= PINTU RFID (ESP8266) =================
+const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword });
 // ================= UPDATE FIRMWARE ESP (file .bin -> ESP8266 / ESP32) =================
 const firmware = require('./firmware')({ app, broadcast, notify, esp32, door });
 // ================= MONITOR SISTEM (CPU/RAM/flash disk) =================
@@ -219,6 +251,15 @@ function setWebEnabled(enabled) {
 }
 
 const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning });
+
+// ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
+// Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
+// Telegram, batas alarm monitoring, sampai akun admin. Tidak perlu mengedit .env di Termux.
+const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
+const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, auth });
+
+// ================= SETUP AWAL (halaman /setup.html) =================
+require('./setup')({ app, saveEnv, settings, esp32, door, telegram, auth, startDevices });
 
 wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
@@ -287,22 +328,44 @@ app.delete('/api/files', wrap(async (req, res) => {
     res.json({ success: true });
 }));
 
-function startServices() {
-    const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
-    console.log('=================================');
-    (ips.length ? ips : ['localhost']).forEach(ip => console.log(`Server aktif: http://${ip}:${PORT}`));
-    console.log(`ESP32: http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
-    storage.status().then(st => console.log(st.ready ? `Penyimpanan: ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
-    console.log('=================================');
+// Layanan perangkat baru dijalankan setelah setup awal selesai (atau langsung kalau .env
+// sudah lengkap). Pengaturan yang diubah dari web memakai esp32.reload()/door.reload()/
+// telegram.restart(), jadi tidak perlu memulai ulang server.
+function startDevices() {
+    if (servicesStarted) return;
+    servicesStarted = true;
     esp32.start();
     door.start();
     system.start();
     telegram.start().then(() => telegram.welcome());
 }
 
+function printBanner() {
+    const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)
+        .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
+    const list = ips.length ? ips : ['localhost'];
+    const port = env('PORT', 3000);
+    console.log('=================================');
+    if (setupRequired()) {
+        list.forEach(ip => console.log(`Setup awal: http://${ip}:${port}/setup.html`));
+        console.log('- Buka alamat itu di HP/PC (satu WiFi dengan Termux).');
+        console.log('- Di halaman setup: buat username & password, isi IP/port/kunci API ESP32');
+        console.log('  dan ESP8266, lalu isi bot Telegram. .env diisi otomatis.');
+        console.log('- Setelah selesai, dashboard bisa dibuka di http://' + list[0] + ':' + port);
+    } else {
+        list.forEach(ip => console.log(`Server aktif: http://${ip}:${port}`));
+    }
+    console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
+    console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);
+    storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
+    console.log('=================================');
+}
+
 setWebEnabled(true).then(() => {
     webRunning = true;
-    if (!servicesStarted) { servicesStarted = true; startServices(); }
+    printBanner();
+    if (setupRequired()) console.log('[Setup] ' + T('setup.startLog'));
+    else startDevices();
 }).catch(e => {
     console.error('[Web] Gagal menjalankan server:', e.message);
     process.exitCode = 1;
