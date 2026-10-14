@@ -29,6 +29,7 @@
         padding: 5px 9px; font: inherit; font-size: 12px; cursor: pointer;
     }
     .langs button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+    .sub { font-size: 12.5px; color: var(--mut); line-height: 1.6; margin: -8px 2px 14px; }
     .bars { display: flex; gap: 6px; margin-bottom: 14px; }
     .bars i { flex: 1; height: 5px; border-radius: 4px; background: #d9e1ee; transition: background .3s; }
     .bars i.on { background: var(--amber); }
@@ -90,6 +91,8 @@
             <button id="lg-zh" onclick="wzLang('zh')">中文</button>
         </div>
     </div>
+
+    <p class="sub" data-i18n="wz.sub"></p>
 
     <div class="bars" id="bars"></div>
 

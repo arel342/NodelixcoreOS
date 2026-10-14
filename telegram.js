@@ -7,6 +7,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
     const token = () => E('TELEGRAM_BOT_TOKEN', '');
     const chatId = () => E('TELEGRAM_CHAT_ID', '');
     let offset = 0, running = false, timer = null;
+    let offReason = '';                       // supaya pesan "dinonaktifkan" tidak berulang
 
     async function api(method, body = {}, timeout = 35000) {
         const r = await fetch(`https://api.telegram.org/bot${token()}/${method}`, {
@@ -178,9 +179,15 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
 
     async function start() {
         if (!token()) {
-            console.log('[Telegram] Bot dinonaktifkan: token bot belum diisi (isi dari web: Pengaturan > Telegram).');
+            // Cukup sekali sampai token diisi: boot, setup awal, dan ganti pengaturan
+            // sama-sama memanggil start(), pesannya jangan menumpuk di log Termux.
+            if (offReason !== 'token') {
+                offReason = 'token';
+                console.log('[Telegram] Bot dinonaktifkan: token bot belum diisi (isi dari web: Pengaturan > Telegram).');
+            }
             return false;
         }
+        offReason = '';
         if (!chatId()) console.warn('[Telegram] Isi Chat ID Telegram dengan ID chat pribadi admin sebelum memakai bot.');
         try {
             const pending = await api('getUpdates', { timeout: 0, allowed_updates: ['message'] }, 8000);

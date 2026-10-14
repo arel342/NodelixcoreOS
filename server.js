@@ -107,18 +107,18 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
-// Bahasa aktif boleh dibaca sebelum login (halaman login ikut bahasa tersimpan)
+// Bahasa aktif boleh dibaca & diganti sebelum login: dipakai halaman login dan halaman
+// setup awal (dua-duanya harus bisa berganti bahasa walau belum ada akun).
 app.get('/api/settings/lang', (req, res) => res.json({ lang: env('LANGUAGE', 'id') }));
-// Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
-
-// Ganti bahasa web (disimpan ke .env, berlaku untuk semua tulisan termasuk pesan server)
 app.post('/api/settings/lang', (req, res) => {
     const l = String((req.body || {}).lang || '');
     if (!T.DICT[l]) return res.status(400).json({ success: false, message: T('set.badLang') });
     saveEnv('LANGUAGE', l);
     res.json({ success: true, message: T('set.saved') });
 });
+// Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
+app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ================= API AUTH =================

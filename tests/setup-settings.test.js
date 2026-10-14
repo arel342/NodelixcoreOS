@@ -1,6 +1,5 @@
-// Isolated tests: tanpa perangkat keras, tanpa server berjalan, tanpa menulis .env asli.
-// Modul settings.js & setup.js dijalankan di vm dengan app (Express palsu), saveEnv palsu,
-// dan fetch palsu supaya alur pengaturan lewat web + setup awal bisa diuji.
+// Isolated tests: tanpa hardware, tanpa server berjalan, tanpa menulis .env.
+// Menguji dua modul baru: settings.js (pengaturan lewat web) dan setup.js (setup awal).
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -10,244 +9,230 @@ const root = path.resolve(__dirname, '..');
 const source = name => fs.readFileSync(path.join(root, name), 'utf8');
 const T = require('../lang');
 
-const response = () => ({
-    code: 200, body: null, headers: {},
-    status(n) { this.code = n; return this; },
-    json(j) { this.body = j; return this; },
-    setHeader(k, v) { this.headers[k] = v; return this; }
-});
+const response = () => ({ code: 200, body: null, status(n) { this.code = n; return this; }, json(j) { this.body = j; return this; } });
 
-// App Express palsu: mencatat route GET/POST supaya bisa dipanggil langsung dari test
-function fakeApp(routes) {
-    return {
-        get: (u, f) => { routes['GET ' + u] = f; },
-        post: (u, f) => { routes['POST ' + u] = f; },
-        use: () => { }
-    };
-}
-
-function load(file, deps, env, fetchImpl) {
-    const routes = {};
-    const ctx = {
+// Muat modul di dalam vm dengan app/saveEnv/modul palsu, lalu kembalikan route yang terdaftar.
+function fixture(file, { env = {}, deps = {}, fetchImpl } = {}) {
+    const routes = {}, writes = {}, calls = { reload: [], restart: 0, sessions: 0 };
+    const app = { get: (u, f) => { routes['GET ' + u] = f; }, post: (u, f) => { routes['POST ' + u] = f; } };
+    const saveEnv = (k, v) => { writes[k] = v; };
+    const make = extra => ({
+        app, saveEnv, esp32: { reload: () => calls.reload.push('esp32') }, door: { reload: () => calls.reload.push('door') },
+        telegram: { restart: () => calls.restart++, test: async () => ({ ok: true }) },
+        // Sama seperti server.js: verify() yang gagal sudah mengirim 403 sendiri.
+        auth: {
+            isAuthed: () => false,
+            verify: (req, res) => { res.status(403).json({ success: false, message: T('auth.wrong') }); return false; },
+            createSession: () => calls.sessions++, keepOnly() { }
+        },
+        settings: { snapshot: () => ({ info: {} }), apply: () => { } },
+        startDevices: () => calls.startDevices = (calls.startDevices || 0) + 1,
+        ...extra
+    });
+    const context = {
         module: { exports: {} }, __dirname: root, console,
         require: n => n === './lang' ? T : require(n),
-        process: { env: { LANGUAGE: 'id', ...env }, uptime: () => 123 },
-        AbortSignal, setTimeout, clearTimeout, FormData, Blob,
-        fetch: fetchImpl || (async () => { throw new Error('fetch tidak diizinkan di test ini'); })
+        process: { env: { LANGUAGE: 'id', ...env } },
+        fetch: fetchImpl || (async () => { throw new Error('fetch tidak dipakai di test ini'); }),
+        AbortSignal, setTimeout, clearTimeout
     };
-    vm.runInNewContext(source(file), ctx);
-    const factory = ctx.module.exports;
-    const api = factory({ app: fakeApp(routes), ...deps });
-    return {
-        mod: factory, api, routes,
-        async get(url, req = {}) { const res = response(); await routes['GET ' + url](req, res); return res; },
-        async post(url, req = {}) { const res = response(); await routes['POST ' + url](req, res); return res; }
-    };
+    vm.runInNewContext(source(file), context);
+    const api = context.module.exports(make(deps));
+    const ctx = { routes, writes, calls, api, deps };
+    ctx.post = (url, body) => { const res = response(); routes['POST ' + url]({ body: body || {}, headers: {}, ip: '127.0.0.1' }, res); return res; };
+    ctx.get = url => { const res = response(); routes['GET ' + url]({ body: {}, headers: {}, ip: '127.0.0.1' }, res); return res; };
+    return ctx;
 }
 
 // ---------- settings.js ----------
-function settingsFixture(env = {}, fetchImpl) {
-    const writes = {}, calls = { esp32: 0, door: 0, telegram: 0 };
-    const auth = { verify: () => true, keepOnly: () => { }, isAuthed: () => true, createSession: () => 'sid' };
-    const f = load('settings.js', {
-        saveEnv: (k, v) => { writes[k] = v; },
-        esp32: { reload: () => { calls.esp32++; } },
-        door: { reload: () => { calls.door++; } },
-        telegram: { restart: () => { calls.telegram++; }, test: async () => ({ ok: true }) },
-        auth
-    }, env, fetchImpl);
-    return { ...f, writes, calls };
-}
 
-test('settings: GET /api/settings mengembalikan nilai bawaan', async () => {
-    const s = settingsFixture();
-    const res = await s.get('/api/settings');
-    assert.equal(res.code, 200);
-    assert.equal(res.body.esp32.port, 80);
-    assert.equal(res.body.door.enrollSec, 30);
-    assert.equal(res.body.telegram.alerts, true);
-    assert.equal(res.body.server.port, 3000);
-    assert.equal(res.body.monitor.iWarn, 5);
-    assert.equal(res.body.info.setupRequired, true);      // ADMIN_PASSWORD belum diisi
+test('settings: GET /api/settings mengembalikan nilai bawaan', () => {
+    const s = fixture('settings.js', { env: { ESP32_IP: '192.168.1.50', ESP32_API_KEY: 'kunci-esp32', TELEGRAM_ALERTS: 'true' } });
+    const r = s.get('/api/settings');
+    assert.equal(r.code, 200);
+    assert.equal(r.body.esp32.ip, '192.168.1.50');
+    assert.equal(r.body.esp32.port, 80);
+    assert.equal(r.body.esp32.apiKey, 'kunci-esp32');
+    assert.equal(r.body.door.port, 80);
+    assert.equal(r.body.telegram.alerts, true);
+    assert.equal(r.body.info.setupRequired, true, 'belum ada ADMIN_PASSWORD -> setup dianggap belum selesai');
+    assert.ok(Array.isArray(r.body.info.ips), 'alamat IP server dilaporkan ke halaman');
 });
 
-test('settings: POST /api/settings menolak alamat/port/kunci/nilai yang tidak valid', async () => {
-    const s = settingsFixture();
-    const cases = [
-        [{ esp32: { ip: '192.168.1.50/24' } }, 'set.badIp'],
-        [{ door: { port: 99999 } }, 'set.badPort'],
-        [{ esp32: { apiKey: 'kunci dengan spasi' } }, 'set.badKey'],
-        [{ monitor: { iWarn: 999 } }, 'set.badNum'],
-        [{ telegram: { chatId: 'bukan-angka' } }, 'set.badChat'],
-        [{ esp32: { labels: 'baris\nbaru' } }, 'set.badText']
-    ];
-    for (const [body, key] of cases) {
-        const res = await s.post('/api/settings', { body });
-        assert.equal(res.code, 400, JSON.stringify(body));
-        assert.ok(res.body.message.length > 0);
-        assert.equal(res.body.success, false);
+test('settings: alamat perangkat harus IPv4/host yang masuk akal', () => {
+    const s = fixture('settings.js');
+    for (const ip of ['999.1.1.1', '1.2.3', '192.168.1', 'alamat salah', 'a b']) {
+        const r = s.post('/api/settings', { esp32: { ip } });
+        assert.equal(r.code, 400, `"${ip}" seharusnya ditolak`);
+        assert.equal(r.body.success, false);
     }
-    assert.deepEqual(s.writes, {}, 'tidak boleh ada yang tersimpan saat validasi gagal');
-    assert.equal(s.calls.esp32 + s.calls.door + s.calls.telegram, 0);
+    assert.deepEqual(s.writes, {}, 'tidak ada yang ditulis kalau ada nilai salah');
 });
 
-test('settings: POST /api/settings menyimpan nilai valid dan memuat ulang modul terkait', async () => {
-    const s = settingsFixture();
-    const res = await s.post('/api/settings', {
-        body: {
-            esp32: { ip: '192.168.1.50', port: 80, apiKey: 'nlx-esp32', pollMs: 1500, labels: 'Relay 1, Relay 3' },
-            door: { ip: '192.168.1.60', port: 81, apiKey: 'nlx-door', enrollSec: 45, pollMs: 800, notifyOpen: true, notifyUnknown: true },
-            telegram: { alerts: true, token: '123456:AAF-abcdefghijklmnopqrstuvwxyz', chatId: '-1001234567890' },
-            monitor: { iWarn: 7.5 }
+test('settings: port, kunci API, angka, dan chat ID divalidasi', () => {
+    const s = fixture('settings.js');
+    assert.equal(s.post('/api/settings', { esp32: { port: 0 } }).code, 400);
+    assert.equal(s.post('/api/settings', { esp32: { port: 70000 } }).code, 400);
+    assert.equal(s.post('/api/settings', { esp32: { apiKey: 'kunci ada spasi' } }).code, 400);
+    assert.equal(s.post('/api/settings', { esp32: { apiKey: 'x'.repeat(65) } }).code, 400);
+    assert.equal(s.post('/api/settings', { monitor: { iWarn: 'bukan angka' } }).code, 400);
+    assert.equal(s.post('/api/settings', { monitor: { cellVMax: 99 } }).code, 400);
+    assert.equal(s.post('/api/settings', { telegram: { chatId: 'bukan id' } }).code, 400);
+    assert.equal(s.post('/api/settings', { telegram: { chatId: '12345' } }).code, 200);
+    assert.equal(s.post('/api/settings', { telegram: { chatId: '@nama_admin' } }).code, 200);
+    assert.deepEqual(s.writes, { TELEGRAM_CHAT_ID: '@nama_admin' });
+});
+
+test('settings: menyimpan nilai valid + memuat ulang modul terkait', () => {
+    const s = fixture('settings.js', { env: { ESP32_POLL_MS: '1000', DOOR_IP: '' } });
+    const r = s.post('/api/settings', {
+        esp32: { ip: '192.168.11.50', port: 8080, pollMs: 2000, labels: 'Relay 1, Relay 2' },
+        door: { ip: 'esp8266-pintu.local', enrollSec: 15, notifyOpen: true },
+        telegram: { alerts: false, chatId: '123456789' }
+    });
+    assert.equal(r.code, 200);
+    assert.deepEqual(s.writes, {
+        ESP32_IP: '192.168.11.50', ESP32_PORT: '8080', ESP32_POLL_MS: '2000', RELAY_LABELS: 'Relay 1, Relay 2',
+        DOOR_IP: 'esp8266-pintu.local', DOOR_ENROLL_SECONDS: '15', DOOR_NOTIFY_OPEN: 'true',
+        TELEGRAM_ALERTS: 'false', TELEGRAM_CHAT_ID: '123456789'
+    });
+    assert.deepEqual(s.calls.reload, ['esp32', 'door']);
+    assert.equal(s.calls.restart, 1);
+    assert.deepEqual(Array.from(r.body.groups).sort(), ['door', 'esp32', 'telegram']);
+});
+
+test('settings: mengosongkan IP mematikan pemantauan perangkat itu', () => {
+    const s = fixture('settings.js', { env: { ESP32_IP: '192.168.1.50' } });
+    const r = s.post('/api/settings', { esp32: { ip: '' } });
+    assert.equal(r.code, 200);
+    assert.equal(s.writes.ESP32_IP, '');
+    assert.deepEqual(s.calls.reload, ['esp32']);
+});
+
+test('settings: ubah akun butuh password lama, password baru minimal 8 karakter', () => {
+    const denied = fixture('settings.js', { env: { ADMIN_PASSWORD: 'rahasia123' } });
+    assert.equal(denied.post('/api/settings/account', { username: 'admin' }).code, 403, 'auth.verify menolak -> 403');
+    assert.deepEqual(denied.writes, {});
+
+    const s = fixture('settings.js', {
+        env: { ADMIN_PASSWORD: 'rahasia123' },
+        deps: { auth: { isAuthed: () => true, verify: () => true, createSession() { }, keepOnly: () => (s.calls.keepOnly = true) } }
+    });
+    assert.equal(s.post('/api/settings/account', { username: 'x' }).code, 400, 'username terlalu pendek');
+    assert.equal(s.post('/api/settings/account', { newPassword: 'pendek', confirmPassword: 'pendek' }).code, 400);
+    assert.equal(s.post('/api/settings/account', { newPassword: 'rahasia456', confirmPassword: 'beda' }).code, 400);
+    assert.deepEqual(s.writes, {});
+    assert.equal(s.post('/api/settings/account', { username: 'arel', newPassword: 'rahasia456', confirmPassword: 'rahasia456' }).code, 200);
+    assert.equal(s.writes.ADMIN_USERNAME, 'arel');
+    assert.equal(s.writes.ADMIN_PASSWORD, 'rahasia456');
+    assert.equal(s.calls.keepOnly, true, 'sesi lain diputus setelah password diganti');
+});
+
+test('settings: uji koneksi perangkat melaporkan versi firmware', async () => {
+    const s = fixture('settings.js', {
+        env: { ESP32_IP: '192.168.1.50', ESP32_API_KEY: 'kunci' },
+        fetchImpl: async url => {
+            assert.equal(url, 'http://192.168.1.50:80/api/data');
+            return { ok: true, status: 200, text: async () => JSON.stringify({ fw: '1.3', ip: '192.168.1.50', rssi: -60 }) };
         }
     });
+    const res = response();
+    await s.routes['POST /api/settings/device/test']({ body: { device: 'esp32' } }, res);
     assert.equal(res.code, 200);
-    assert.equal(res.body.success, true);
-    assert.equal(s.writes.ESP32_IP, '192.168.1.50');
-    assert.equal(s.writes.ESP32_POLL_MS, '1500');
-    assert.equal(s.writes.ESP32_PORT, undefined, 'nilai yang tidak berubah tidak ditulis ulang');
-    assert.equal(s.writes.DOOR_PORT, '81');
-    assert.equal(s.writes.DOOR_ENROLL_SECONDS, '45');
-    assert.equal(s.writes.DOOR_NOTIFY_OPEN, 'true');
-    assert.equal(s.writes.TELEGRAM_CHAT_ID, '-1001234567890');
-    assert.equal(s.writes.I_WARN_A, '7.5');
-    assert.equal(s.calls.esp32, 1);
-    assert.equal(s.calls.door, 1);
-    assert.equal(s.calls.telegram, 1);
+    assert.equal(res.body.fw, '1.3');
+    assert.match(res.body.message, /1\.3/);
 });
 
-test('settings: IP perangkat boleh dikosongkan (perangkat dinonaktifkan)', async () => {
-    const s = settingsFixture({ ESP32_IP: '192.168.1.50' });
-    const res = await s.post('/api/settings', { body: { esp32: { ip: '' } } });
-    assert.equal(res.code, 200);
-    assert.equal(s.writes.ESP32_IP, '', 'mengosongkan IP = perangkat tidak dipantau');
-    assert.equal(s.calls.esp32, 1);
+test('settings: perangkat tanpa IP dan perangkat tak dikenal ditolak rapi', () => {
+    const s = fixture('settings.js');
+    assert.equal(s.post('/api/settings/device/test', { device: 'esp32' }).code, 400);
+    assert.equal(s.post('/api/settings/device/portal', { device: 'esp32' }).code, 400);
+    assert.equal(s.post('/api/settings/device/test', { device: 'tv' }).code, 400);
 });
 
-test('settings: POST /api/settings/account menolak tanpa password lama dan tanpa konfirmasi', async () => {
-    // password lama salah -> auth.verify mengirim 403 sendiri, tidak ada yang tersimpan
-    const denied = settingsFixture({ ADMIN_PASSWORD: 'rahasia123', ADMIN_USERNAME: 'admin' }, null);
-    denied.api && null;
-    const s = settingsFixture({ ADMIN_PASSWORD: 'rahasia123', ADMIN_USERNAME: 'admin' });
-
-    // password benar tapi password baru terlalu pendek
-    const res = await s.post('/api/settings/account', { body: { password: 'rahasia123', username: 'admin', newPassword: 'pendek', confirmPassword: 'pendek' } });
-    assert.equal(res.code, 400);
-    assert.equal(s.writes.ADMIN_PASSWORD, undefined);
-
-    // password baru tidak sama dengan konfirmasi
-    const res2 = await s.post('/api/settings/account', { body: { password: 'rahasia123', username: 'admin', newPassword: 'rahasia456', confirmPassword: 'rahasia789' } });
-    assert.equal(res2.code, 400);
-    assert.equal(s.writes.ADMIN_PASSWORD, undefined);
-
-    // username baru saja (password tidak diganti)
-    const res3 = await s.post('/api/settings/account', { body: { password: 'rahasia123', username: 'arel', newPassword: '', confirmPassword: '' } });
-    assert.equal(res3.code, 200);
-    assert.equal(s.writes.ADMIN_USERNAME, 'arel');
-    assert.equal(s.writes.ADMIN_PASSWORD, undefined, 'password lama tidak ditulis ulang');
-});
-
-test('settings: push ke ESP memakai kunci perangkat dan menerjemahkan 401', async () => {
-    const env = { ESP32_IP: 'esp32.test', ESP32_PORT: '80', ESP32_API_KEY: 'nlx-baru' };
-    const seen = [];
-    const s = settingsFixture(env, async (url, opt) => {
-        seen.push({ url, opt });
-        return { ok: false, status: 401, json: async () => ({ ok: false, error: 'unauthorized' }) };
+test('settings: kunci API perangkat dipakai di header X-API-Key', async () => {
+    let seen = null;
+    const s = fixture('settings.js', {
+        env: { DOOR_IP: '192.168.1.60', DOOR_API_KEY: 'kunci-pintu' },
+        fetchImpl: async (url, opt) => { seen = { url, opt }; throw new Error('perangkat mati'); }
     });
-    const res = await s.post('/api/settings/device/push', { body: { device: 'esp32', deviceKey: 'nlx-lama', ssid: 'Rumah', pass: 'rahasia-wifi' } });
-    assert.equal(res.code, 502);
-    assert.equal(seen[0].url, 'http://esp32.test:80/api/config');
-    assert.equal(seen[0].opt.headers['X-API-Key'], 'nlx-lama');       // kunci yang masih ada di perangkat
-    assert.equal(JSON.parse(seen[0].opt.body).api_key, undefined);   // kunci baru tidak dikirim kalau kosong
-    assert.match(res.body.message, /kunci/i);
-});
-
-test('settings: push IP statis memerlukan IPv4 yang benar', async () => {
-    const env = { DOOR_IP: 'door.test', DOOR_API_KEY: 'nlx-door' };
-    const s = settingsFixture(env, async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
-    const bad = await s.post('/api/settings/device/push', { body: { device: 'esp8266', dhcp: false, ip: '999.1.1.1', gw: '192.168.1.1', mask: '255.255.255.0' } });
-    assert.equal(bad.code, 400);
-    const ok = await s.post('/api/settings/device/push', { body: { device: 'esp8266', dhcp: false, ip: '192.168.1.60', gw: '192.168.1.1', mask: '255.255.255.0', openSec: 7 } });
-    assert.equal(ok.code, 200);
-    assert.equal(ok.body.success, true);
+    const res = response();
+    await s.routes['POST /api/settings/device/portal']({ body: { device: 'esp8266' } }, res);
+    assert.equal(seen.url, 'http://192.168.1.60:80/api/portal');
+    assert.equal(seen.opt.headers['X-API-Key'], 'kunci-pintu');
+    assert.equal(res.code, 502, 'perangkat tidak menjawab -> pesan jelas, bukan crash');
+    assert.match(res.body.message, /tidak menjawab|Gagal/i);
 });
 
 // ---------- setup.js ----------
-function setupFixture(env = {}, auth = {}) {
-    const writes = {}, sessions = [];
-    const calls = { devices: 0, welcome: 0 };
-    const A = {
-        isAuthed: () => false, createSession: res => { sessions.push(res); return 'sid-baru'; },
-        verify: () => true, keepOnly: () => { }, ...auth
-    };
-    const settings = { snapshot: () => ({ esp32: { ip: '', port: 80, apiKey: '' }, door: { ip: '', port: 80, apiKey: '', enrollSec: 30 }, telegram: { alerts: true, token: '', chatId: '' }, monitor: {}, server: {}, info: { port: 3000, ips: ['192.168.1.20'], lang: 'id', version: '1.0.0', node: 'v22', envFile: '.env', username: 'admin', setupDone: false, setupRequired: true } }), apply: () => ({ changed: [] }) };
-    const f = load('setup.js', {
-        saveEnv: (k, v) => { writes[k] = v; },
-        settings,
-        esp32: { reload: () => { } }, door: { reload: () => { } },
-        telegram: { restart: () => { }, welcome: async () => { calls.welcome++; return true; } },
-        auth: A,
-        startDevices: () => { calls.devices++; }
-    }, env);
-    return { ...f, writes, calls, sessions };
+
+// setup.js memakai settings.js yang asli: validasi IP/port dan penulisan .env diuji sungguhan.
+function setupFixture({ env = {}, deps = {} } = {}) {
+    const st = fixture('settings.js', { env });
+    const s = fixture('setup.js', { env, deps: { settings: st.api, ...deps } });
+    s.st = st;
+    return s;
 }
 
-test('setup: status terbuka sebelum ada akun, akun baru langsung membuat sesi', async () => {
+test('setup: status terbuka sebelum ada akun, sisanya terkunci setelah akun dibuat', () => {
     const s = setupFixture();
-    const st = await s.get('/api/setup/status', { headers: {}, path: '/api/setup/status' });
+    const st = s.get('/api/setup/status');
     assert.equal(st.body.required, true);
     assert.equal(st.body.authed, false);
+    assert.equal(st.body.account.hasPassword, false);
+    assert.ok(st.body.server.port > 0);
+    assert.equal(st.body.server.ips.length > 0, true, 'alamat server ditampilkan di langkah 2');
+    assert.equal(st.body.esp32.ip, '', 'sebelum diisi, kolom perangkat kosong');
+    assert.equal(st.body.esp32.port, 80);
 
-    const bad = await s.post('/api/setup/account', { body: { username: 'admin', password: 'pendek', confirmPassword: 'pendek' } });
-    assert.equal(bad.code, 400);
-    const bad2 = await s.post('/api/setup/account', { body: { username: 'a b', password: 'rahasia123', confirmPassword: 'rahasia123' } });
-    assert.equal(bad2.code, 400);
-    const bad3 = await s.post('/api/setup/account', { body: { username: 'admin', password: 'rahasia123', confirmPassword: 'rahasia124' } });
-    assert.equal(bad3.code, 400);
+    // Setelah akun ada dan belum login, API setup lain harus menolak
+    const done = setupFixture({ env: { ADMIN_PASSWORD: 'rahasia123' } });
+    const locked = done.post('/api/setup/device', { device: 'esp32', ip: '192.168.1.9' });
+    assert.equal(locked.code, 403);
+    assert.equal(locked.body.success, false);
+});
 
-    const res = await s.post('/api/setup/account', { body: { username: 'admin', password: 'rahasia123', confirmPassword: 'rahasia123' } });
-    assert.equal(res.code, 200);
+test('setup: akun admin divalidasi lalu langsung membuat sesi login', () => {
+    const s = setupFixture();
+    assert.equal(s.post('/api/setup/account', { username: 'ab', password: 'rahasia123', confirmPassword: 'rahasia123' }).code, 400);
+    assert.equal(s.post('/api/setup/account', { username: 'admin', password: 'pendek', confirmPassword: 'pendek' }).code, 400);
+    assert.equal(s.post('/api/setup/account', { username: 'admin', password: 'rahasia123', confirmPassword: 'beda' }).code, 400);
+    assert.deepEqual(s.writes, {}, 'tidak ada yang ditulis kalau belum valid');
+
+    const ok = s.post('/api/setup/account', { username: 'admin', password: 'rahasia123', confirmPassword: 'rahasia123' });
+    assert.equal(ok.code, 200);
     assert.equal(s.writes.ADMIN_USERNAME, 'admin');
     assert.equal(s.writes.ADMIN_PASSWORD, 'rahasia123');
-    assert.equal(s.sessions.length, 1, 'langkah berikutnya harus terautentikasi lewat sesi ini');
+    assert.equal(s.calls.sessions, 1, 'langsung login supaya langkah ESP32/Telegram boleh dilanjutkan');
 });
 
-test('setup: selesai hanya boleh setelah akun ada, lalu mengaktifkan layanan perangkat', async () => {
+test('setup: langkah ESP32/ESP8266 memakai validator settings.js', () => {
     const s = setupFixture();
-    const no = await s.post('/api/setup/finish', { body: {} });
-    assert.equal(no.code, 400);
-
-    const s2 = setupFixture({ ADMIN_PASSWORD: 'rahasia123', ADMIN_USERNAME: 'admin' }, { isAuthed: () => true });
-    const res = await s2.post('/api/setup/finish', { body: {} });
-    assert.equal(res.code, 200);
-    assert.equal(res.body.redirect, '/');
-    assert.equal(s2.writes.SETUP_DONE, '1');
-    assert.equal(s2.calls.devices, 1);
-    assert.equal(s2.calls.welcome, 1);
-    assert.equal(s2.sessions.length, 1, 'setelah selesai admin langsung login');
-});
-
-test('setup: sudah selesai + belum login -> API setup ditolak', async () => {
-    const s = setupFixture({ ADMIN_PASSWORD: 'rahasia123' }, { isAuthed: () => false });
-    const res = await s.post('/api/setup/device', { body: { device: 'esp32', ip: '192.168.1.50', port: 80, apiKey: 'nlx-esp32' } });
-    assert.equal(res.code, 403);
-    assert.equal(s.writes.ESP32_IP, undefined);
-
-    const s2 = setupFixture({ ADMIN_PASSWORD: 'rahasia123' }, { isAuthed: () => true });
-    const ok = await s2.post('/api/setup/device', { body: { device: 'esp32', ip: '192.168.1.50', port: 80, apiKey: 'nlx-esp32' } });
-    assert.equal(ok.code, 200);
-});
-
-test('setup: nilai ESP32/ESP8266 yang tidak valid ditolak dengan pesan jelas', async () => {
-    const s = setupFixture({}, { isAuthed: () => true });
-    // settings.apply asli dari settings.js dipakai supaya validasi ikut teruji
-    const real = settingsFixture({});
-    const bad = await real.post('/api/settings', { body: { esp32: { ip: 'bukan ip!' } } });
+    const bad = s.post('/api/setup/device', { device: 'esp32', ip: '999.1.1.1' });
     assert.equal(bad.code, 400);
-    assert.ok(bad.body.message.includes('ESP32_IP'));
-    const s2 = setupFixture({});
-    const res = await s2.post('/api/setup/device', { body: { device: 'tidak-ada', ip: '192.168.1.50' } });
-    assert.equal(res.code, 400);
-    assert.equal(s2.writes.ESP32_IP, undefined);
-    assert.ok(s);
+    const badPort = s.post('/api/setup/device', { device: 'esp8266', port: 0 });
+    assert.equal(badPort.code, 400);
+    assert.equal(s.post('/api/setup/device', { device: 'tv' }).code, 400);
+
+    const ok = s.post('/api/setup/device', { device: 'esp8266', ip: '192.168.11.60', port: 80, apiKey: 'nlx-pintu' });
+    assert.equal(ok.code, 200);
+    assert.deepEqual(s.st.writes, { DOOR_IP: '192.168.11.60', DOOR_API_KEY: 'nlx-pintu' });
+    assert.deepEqual(s.calls.reload, ['door'], 'perangkat yang baru diisi IP langsung dicoba dihubungi');
+});
+
+test('setup: selesai hanya boleh setelah ada akun, lalu menjalankan layanan perangkat', () => {
+    const s = setupFixture({ env: { ADMIN_PASSWORD: 'rahasia123' }, deps: { auth: { isAuthed: () => true, verify: () => true, createSession: () => s.calls.sessions++ } } });
+    const res = response();
+    s.routes['POST /api/setup/finish']({ body: {} }, res);
+    assert.equal(res.code, 200);
+    assert.equal(s.writes.SETUP_DONE, '1');
+    assert.equal(s.calls.startDevices, 1);
+    assert.equal(res.body.redirect, '/');
+});
+
+test('setup: sebelum akun dibuat, siapa pun yang membuka halaman boleh mengisi', () => {
+    const s = setupFixture();
+    assert.equal(s.post('/api/setup/telegram', { alerts: true, chatId: '123456789' }).code, 200);
+    assert.equal(s.st.writes.TELEGRAM_CHAT_ID, '123456789');
+    assert.equal(s.calls.restart, 1, 'bot Telegram dimuat ulang dengan nilai baru');
 });

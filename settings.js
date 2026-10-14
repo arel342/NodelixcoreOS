@@ -31,7 +31,17 @@ const isIpv4 = v => { const m = IPV4_RE.exec(String(v || '')); return !!m && m.s
 
 const bad = m => { const e = new Error(m); e.status = 400; return e; };
 
-const vHost = (v, k) => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!HOST_RE.test(v)) throw bad(T('set.badIp', { k })); return v; };
+// Alamat perangkat: IPv4 (ketat, mis. 999.1.1.1 ditolak) atau nama host (mis. esp32.local)
+const vHost = (v, k) => {
+    v = String(v == null ? '' : v).trim();
+    if (!v) return '';
+    if (/^[0-9.]+$/.test(v)) {                    // hanya angka & titik -> wajib IPv4 yang benar
+        if (!isIpv4(v)) throw bad(T('set.badIp', { k }));
+        return v;
+    }
+    if (!HOST_RE.test(v)) throw bad(T('set.badIp', { k }));
+    return v;
+};
 const vPort = (v, k) => { const n = parseInt(v, 10); if (!Number.isInteger(n) || n < 1 || n > 65535) throw bad(T('set.badPort', { k })); return String(n); };
 const vKey = (v, k) => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!KEY_RE.test(v)) throw bad(T('set.badKey', { k })); return v; };
 const vText = (v, max, k) => { const s = String(v == null ? '' : v); if (s.length > max || /[\r\n]/.test(s)) throw bad(T('set.badText', { k, max })); return s.trim(); };
