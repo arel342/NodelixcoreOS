@@ -250,13 +250,14 @@ function setWebEnabled(enabled) {
     });
 }
 
+// Buat objek auth sebelum membuat AI agent karena auth diteruskan sebagai dependensi.
+const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
 const ai = require('./ai')({ app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, auth, broadcast, notify });
 const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning, ai });
 
 // ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
 // Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
 // Telegram, batas alarm monitoring, sampai akun admin. Tidak perlu mengedit .env di Termux.
-const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
 const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, ai, auth });
 
 // ================= SETUP AWAL (halaman /setup.html) =================
