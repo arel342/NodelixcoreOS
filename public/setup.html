@@ -217,14 +217,45 @@
         </div>
     </section>
 
-    <!-- ============ LANGKAH 6: SELESAI ============ -->
+    <!-- ============ LANGKAH 6: AI AGENT (GEMINI) ============ -->
     <section class="card hid" id="st-6">
         <div class="step-of" id="of-6"></div>
+        <h2 data-i18n="wz.aiTitle">AI Agent (Gemini)</h2>
+        <p class="lead" data-i18n="wz.aiDesc"></p>
+        <div class="sw">
+            <input type="checkbox" id="in-ai-enabled" checked>
+            <label for="in-ai-enabled" data-i18n="wz.aiEnabled">Aktifkan AI Agent</label>
+        </div>
+        <label class="f" data-i18n="wz.aiKey">Kunci API Gemini</label>
+        <input type="password" id="in-ai-key" spellcheck="false" autocomplete="off" placeholder="AIza...">
+        <label class="f" data-i18n="wz.aiModel">Model Gemini</label>
+        <input type="text" id="in-ai-model" spellcheck="false" autocomplete="off" list="ai-models" placeholder="gemini-1.5-flash">
+        <datalist id="ai-models">
+            <option value="gemini-2.5-flash"></option>
+            <option value="gemini-2.5-flash-lite"></option>
+            <option value="gemini-2.0-flash"></option>
+            <option value="gemini-1.5-flash"></option>
+        </datalist>
+        <p class="hint" data-i18n="wz.aiHow"></p>
+        <div class="acts">
+            <button class="btn ghost" type="button" onclick="wzTestAi()" id="btn-aitest" data-i18n="wz.aiTest">Uji kunci</button>
+        </div>
+        <div class="msg" id="msg-6"></div>
+        <div class="acts">
+            <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
+            <button class="btn ghost" onclick="wzGo(1)" data-i18n="wz.skip">Lewati</button>
+            <button class="btn" onclick="wzSaveAi()" data-i18n="wz.saveNext">Simpan &amp; lanjut</button>
+        </div>
+    </section>
+
+    <!-- ============ LANGKAH 7: SELESAI ============ -->
+    <section class="card hid" id="st-7">
+        <div class="step-of" id="of-7"></div>
         <div class="done-ic">✓</div>
         <h2 data-i18n="wz.s6t">Selesai!</h2>
         <p class="lead" data-i18n="wz.s6d"></p>
         <div id="summary"></div>
-        <div class="msg" id="msg-6"></div>
+        <div class="msg" id="msg-7"></div>
         <div class="acts">
             <button class="btn ghost" onclick="wzGo(-1)" data-i18n="wz.back">Kembali</button>
             <button class="btn amber grow" id="btn-finish" onclick="wzFinish()" data-i18n="wz.finish">Selesai &amp; buka dashboard</button>

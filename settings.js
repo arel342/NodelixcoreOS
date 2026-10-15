@@ -2,14 +2,19 @@
 // settings.js — Pengaturan lewat web (tab Pengaturan), tanpa mengedit .env di Termux.
 //
 // Tujuan: setelah setup awal di browser, semua nilai penting diubah dari halaman web —
-// IP/port/kunci API ESP32 & ESP8266 (pintu RFID), token + chat ID Telegram, batas alarm
-// monitoring baterai/arus, sampai akun admin. Nilai disimpan ke .env (saveEnv dari
-// server.js) dan langsung dipakai proses yang sedang berjalan, jadi tidak perlu restart
-// aplikasi. Perangkat yang sebelumnya belum diisi IP-nya otomatis mulai dipantau.
+// IP/port/kunci API ESP32 & ESP8266 (pintu RFID), token + chat ID Telegram, kunci API
+// Gemini untuk AI Agent, batas alarm monitoring baterai/arus, sampai akun admin. Nilai
+// disimpan ke .env (saveEnv dari server.js) dan langsung dipakai proses yang sedang
+// berjalan, jadi tidak perlu restart aplikasi. Perangkat yang sebelumnya belum diisi
+// IP-nya otomatis mulai dipantau; kunci Gemini yang baru diisi langsung dipakai /ai.
+//
+// Kelompok "ai" ({ enabled, apiKey, model }) adalah kelompok yang sama yang dipakai
+// langkah AI Agent di halaman setup awal (setup.js), sehingga keduanya menulis
+// AI_AGENT_ENABLED / GEMINI_API_KEY / GEMINI_MODEL dengan validasi yang sama.
 //
 // Route di bawah ini sudah dilindungi login di server.js (lihat daftar requireAuth):
 //   GET  /api/settings               -> seluruh nilai pengaturan + info server
-//   POST /api/settings               -> simpan sebagian pengaturan { esp32:{...}, door:{...} }
+//   POST /api/settings               -> simpan sebagian pengaturan { esp32:{...}, ai:{...} }
 //   POST /api/settings/account       -> ubah username / password admin (butuh password lama)
 //   POST /api/settings/telegram/test -> kirim pesan uji ke Telegram
 //   POST /api/settings/device/test   -> uji koneksi ke ESP32 / ESP8266

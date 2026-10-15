@@ -12,6 +12,10 @@ const { spawn } = require('child_process');
 const E = (k, d = '') => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const { skills, systemPrompt } = require('./skills');
 
+// Pesan singkat saat kunci API belum ada: diisi dari setup awal (/setup.html) atau
+// tab Pengaturan > AI Agent, keduanya menulis GEMINI_API_KEY ke .env.
+const KEY_HELP = 'GEMINI_API_KEY belum diisi. Isi di setup awal (langkah AI Agent) atau tab Pengaturan > AI Agent — kunci gratis dari Google AI Studio (aistudio.google.com/apikey).';
+
 const SECRET = /(PASSWORD|PASSWD|TOKEN|API_?KEY|SECRET)/i;
 function childEnv() {
     const out = {};
@@ -48,6 +52,7 @@ const toolDeclarations = [
 module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadcast, notify } = {}) => {
     const deps = { esp32, door, telegram, terminal, auth, broadcast, notify };
     const histories = new Map();
+    let started = false;                       // start() hanya sekali menampilkan status di log
 
     function cfg() {
         return {
@@ -112,8 +117,8 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
 
     async function gemini(contents) {
         const c = cfg();
-        if (!c.enabled) throw new Error('AI agent dinonaktifkan');
-        if (!c.apiKey) throw new Error('GEMINI_API_KEY belum diisi');
+        if (!c.enabled) throw new Error('AI agent dinonaktifkan. Aktifkan di setup awal atau Pengaturan > AI Agent.');
+        if (!c.apiKey) throw new Error(KEY_HELP);
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(c.model)}:generateContent?key=${encodeURIComponent(c.apiKey)}`;
         const body = {
             system_instruction: { parts: [{ text: systemPrompt }] },
@@ -130,12 +135,37 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         return j;
     }
 
+    // Cek cepat satu kunci API: panggil model dengan prompt pendek. Kalau override
+    // { apiKey, model } dikirim (halaman setup awal), kunci itu yang diuji — bukan yang
+    // tersimpan di .env — jadi pengguna tahu kuncinya benar sebelum menyimpan.
+    async function testKey(override = {}) {
+        const c = cfg();
+        const apiKey = String(override.apiKey === undefined ? c.apiKey : override.apiKey).trim();
+        if (!apiKey) { const e = new Error(KEY_HELP); e.status = 400; throw e; }
+        const model = String(override.model || c.model).trim();
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const r = await fetch(url, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Balas singkat: OK' }] }] }),
+            signal: AbortSignal.timeout(30000)
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok) {
+            const msg = (j && j.error && (j.error.message || j.error.status)) || ('Gemini HTTP ' + r.status);
+            throw new Error(`${msg} (model ${model})`);
+        }
+        const parts = ((((j || {}).candidates || [])[0] || {}).content || {}).parts || [];
+        const text = parts.map(p => p && p.text).filter(Boolean).join(' ').trim();
+        if (!text) throw new Error('Gemini menjawab kosong — pastikan model sudah diizinkan untuk kunci ini');
+        return text;
+    }
+
     async function handleMessage(userText, chatId) {
         userText = String(userText || '').trim();
         if (!userText) return 'Tulis pertanyaan atau perintah untuk AI Agent.';
         const c = cfg();
-        if (!c.enabled) return 'AI agent dinonaktifkan. Aktifkan di Pengaturan > AI Agent.';
-        if (!c.apiKey) return 'GEMINI_API_KEY belum diisi. Isi di Pengaturan > AI Agent (gratis dari Google AI Studio).';
+        if (!c.enabled) return 'AI agent dinonaktifkan. Aktifkan di setup awal atau Pengaturan > AI Agent.';
+        if (!c.apiKey) return KEY_HELP;
 
         const history = histories.get(chatId) || [];
         const contents = [...history, { role: 'user', parts: [{ text: userText }] }];
@@ -171,9 +201,16 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         return 'Terlalu banyak langkah. Coba ulangi permintaan.';
     }
 
-    // Route HTTP (opsional, untuk uji dari web)
+    // Route HTTP (opsional, untuk uji dari web). /api/ai/status ikut dipakai halaman
+    // setup awal dan tab Pengaturan untuk menampilkan apakah kunci Gemini sudah ada.
     if (app) {
-        app.get('/api/ai/status', (req, res) => res.json({ enabled: cfg().enabled, hasKey: !!cfg().apiKey, model: cfg().model, skills: skills.map(s => s.name) }));
+        app.get('/api/ai/status', (req, res) => {
+            const c = cfg();
+            res.json({
+                enabled: c.enabled, hasKey: !!c.apiKey, model: c.model,
+                ready: c.enabled && !!c.apiKey, skills: skills.map(s => s.name)
+            });
+        });
         app.post('/api/ai/chat', async (req, res) => {
             try {
                 const reply = await handleMessage((req.body || {}).message || '', req.ip);
@@ -183,20 +220,29 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
             }
         });
         app.post('/api/ai/test', async (req, res) => {
-            const c = cfg();
-            if (!c.apiKey) return res.status(400).json({ success: false, message: 'GEMINI_API_KEY belum diisi' });
+            const b = req.body || {};
             try {
-                const r = await gemini([{ role: 'user', parts: [{ text: 'Halo, balas singkat: OK' }] }]);
-                const txt = (((r.candidates || [])[0] || {}).content || {}).parts || [];
-                res.json({ success: true, reply: txt.map(p => p.text).join(' ') });
+                const reply = await testKey({
+                    apiKey: b.apiKey === undefined || b.apiKey === '' ? undefined : b.apiKey,
+                    model: b.model
+                });
+                res.json({ success: true, reply });
             } catch (e) {
-                res.status(502).json({ success: false, message: e.message });
+                res.status(e && e.status === 400 ? 400 : 502).json({ success: false, message: e.message });
             }
         });
     }
 
     return {
-        start() { return cfg().enabled && !!cfg().apiKey; },
+        start() {
+            if (started) return cfg().enabled && !!cfg().apiKey;
+            started = true;
+            const c = cfg();
+            if (!c.apiKey) console.log('[AI] ' + KEY_HELP);
+            else console.log(`[AI] AI Agent ${c.enabled ? 'aktif' : 'nonaktif'} (model ${c.model}).`);
+            return c.enabled && !!c.apiKey;
+        },
+        testKey,
         reload,
         handleMessage,
         handle: handleMessage,

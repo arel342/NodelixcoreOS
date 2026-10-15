@@ -6,12 +6,14 @@
 //   Langkah 3  ESP32: IP, port, kunci API            -> POST /api/setup/device
 //   Langkah 4  ESP8266 (pintu): IP, port, kunci API  -> POST /api/setup/device
 //   Langkah 5  Bot Telegram (opsional)               -> POST /api/setup/telegram
-//   Langkah 6  Selesai                               -> POST /api/setup/finish (login otomatis)
+//   Langkah 6  Kunci API Gemini (opsional)           -> POST /api/setup/ai (+ /api/setup/ai/test)
+//   Langkah 7  Selesai                               -> POST /api/setup/finish (login otomatis)
 //
-// Semua nilai yang diisi di sini ditulis server ke .env, jadi pemakaian berikutnya
-// tidak perlu mengedit file apa pun di Termux.
+// Semua nilai yang diisi di sini dikirim ke server lalu ditulis ke .env, jadi pemakaian
+// berikutnya tidak perlu mengedit file apa pun di Termux. Kunci API Gemini boleh dikosongkan:
+// nilai yang sudah tersimpan tidak dihapus oleh panduan setup, hanya diganti bila diisi baru.
 // ============================================================================
-const WZ = { s: null, step: 1, total: 6, locked: false };
+const WZ = { s: null, step: 1, total: 7, locked: false };
 
 const $ = id => document.getElementById(id);
 
@@ -82,7 +84,8 @@ function wzSummary() {
         row('ESP32 · API', s.esp32.apiKey ? '••••••' : t('wz.notFilled')) +
         row('ESP8266 · IP', key(s.door.ip) + (s.door.ip ? `:${s.door.port}` : '')) +
         row('ESP8266 · API', s.door.apiKey ? '••••••' : t('wz.notFilled')) +
-        row('Telegram', s.telegram.token ? (s.telegram.chatId ? t('cfg.on') : t('wz.notFilled')) : t('cfg.off'));
+        row('Telegram', s.telegram.token ? (s.telegram.chatId ? t('cfg.on') : t('wz.notFilled')) : t('cfg.off')) +
+        row(t('wz.sumAi'), (s.ai && s.ai.hasKey) ? '••••••' + ((s.ai.enabled === false) ? ' · ' + t('cfg.off') : '') : t('wz.notFilled'));
 }
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -124,6 +127,13 @@ async function wzLoad() {
     $('in-tg-alerts').checked = s.telegram.alerts !== false;
     $('in-tg-token').value = s.telegram.token || '';
     $('in-tg-chat').value = s.telegram.chatId || '';
+    const ai = s.ai || {};
+    $('in-ai-enabled').checked = ai.enabled !== false;
+    $('in-ai-model').value = ai.model || '';
+    // Kunci lama tidak ikut dikirim (kolom dibiarkan kosong) supaya menyimpan langkah ini
+    // tanpa mengetik apa pun tidak menimpa kunci yang sudah tersimpan di .env.
+    $('in-ai-key').value = '';
+    $('in-ai-key').placeholder = ai.hasKey ? t('wz.aiStored') : 'AIza...';
     $('foot').textContent = `NodelixcoreOS ${s.server.version || ''} · Node ${s.server.node || ''} · ${s.server.env || '.env'}`;
 
     wzStep(1);
@@ -193,6 +203,59 @@ async function wzSaveTg() {
     } catch (e) { wzMsg(5, t('wz.err', { e: e.message }), 'err'); }
 }
 
+// Nilai langkah AI: kunci yang diketik saja yang dikirim, supaya mengosongkan kolom
+// tidak menghapus kunci yang sudah tersimpan di .env (server juga mengabaikannya).
+function wzAiBody() {
+    const body = { enabled: $('in-ai-enabled').checked };
+    const model = $('in-ai-model').value.trim();
+    const key = $('in-ai-key').value.trim();
+    if (model) body.model = model;            // kosong = pakai default server (GEMINI_MODEL)
+    if (key) body.apiKey = key;              // kosong = kunci yang sudah ada tidak diubah
+    return body;
+}
+
+// Simpan langkah AI lalu perbarui status di dalam WZ.s supaya ringkasan langkah terakhir
+// ikut benar. Dipakai tombol "Simpan & lanjut" dan tombol "Uji kunci".
+async function wzAiSave() {
+    const j = await wzPost('/api/setup/ai', wzAiBody());
+    const st = j && j.ai;
+    if (st) {
+        WZ.s.ai = { enabled: st.enabled, hasKey: st.hasKey, model: st.model, apiKey: (WZ.s.ai && WZ.s.ai.apiKey) || '' };
+        $('in-ai-key').value = '';
+        if (st.hasKey) $('in-ai-key').placeholder = t('wz.aiStored');
+    }
+    return j;
+}
+
+async function wzSaveAi() {
+    wzMsg(6, '…');
+    try {
+        await wzAiSave();
+        wzMsg(6, t('wz.saved'), 'ok');
+        wzStep(7);
+    } catch (e) { wzMsg(6, t('wz.err', { e: e.message }), 'err'); }
+}
+
+// Uji kunci ke Gemini sebelum lanjut: kunci/model yang sedang diketik dikirim sebagai
+// override, jadi kunci yang terbukti benar langsung tersimpan walau langkah berikutnya
+// menekan "Lewati".
+async function wzTestAi() {
+    const b = $('btn-aitest');
+    b.disabled = true; wzMsg(6, '…');
+    const typed = $('in-ai-key').value.trim();
+    try {
+        const r = await fetch('/api/setup/ai/test', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ apiKey: typed, model: $('in-ai-model').value.trim() })
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || !j.success) throw new Error(j.message || ('HTTP ' + r.status));
+        if (typed) await wzAiSave();
+        wzMsg(6, j.message || t('wz.saved'), 'ok');
+    } catch (e) { wzMsg(6, e.message, 'err'); }
+    b.disabled = false;
+}
+
 async function wzTestTg() {
     const b = $('btn-tgtest');
     b.disabled = true; wzMsg(5, '…');
@@ -211,12 +274,12 @@ async function wzTestTg() {
 
 async function wzFinish() {
     const b = $('btn-finish');
-    b.disabled = true; wzMsg(6, '…');
+    b.disabled = true; wzMsg(7, '…');
     try {
         const j = await wzPost('/api/setup/finish', {});
-        wzMsg(6, j.message || t('setup.ok'), 'ok');
+        wzMsg(7, j.message || t('setup.ok'), 'ok');
         setTimeout(() => { location.href = j.redirect || '/'; }, 900);
-    } catch (e) { wzMsg(6, t('wz.err', { e: e.message }), 'err'); b.disabled = false; }
+    } catch (e) { wzMsg(7, t('wz.err', { e: e.message }), 'err'); b.disabled = false; }
 }
 
 // ---------- Alat bantu kecil ----------

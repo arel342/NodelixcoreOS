@@ -7,7 +7,8 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 ## Fitur
 
 * Web server berbasis Node.js dan Express
-* Setup awal lewat browser (buat akun admin, isi port ESP32/ESP8266, dan bot Telegram)
+* Setup awal lewat browser (buat akun admin, isi port ESP32/ESP8266, bot Telegram, dan
+  kunci API Gemini untuk AI Agent)
 * Pengaturan lewat web: semua isi `.env` bisa diubah dari tab Pengaturan (tanpa edit file di Termux)
 * Login administrator
 * File manager berbasis web
@@ -55,8 +56,10 @@ Flash disk yang terpasang dideteksi otomatis, jadi ID/nama mount tidak perlu diu
 ```text
 NodelixcoreOS/
 ├── server.js
-├── settings.js          <- pengaturan lewat web (ESP32, ESP8266, Telegram, akun, monitoring)
-├── setup.js             <- setup awal (halaman /setup.html)
+├── settings.js          <- pengaturan lewat web (ESP32, ESP8266, Telegram, AI, akun, monitoring)
+├── setup.js             <- setup awal (halaman /setup.html), termasuk langkah kunci API Gemini
+├── ai.js                <- AI Agent Gemini (dipakai perintah /ai di Telegram)
+├── skills.js            <- daftar "skill"/alat yang boleh dipanggil AI Agent
 ├── esp32.js
 ├── door.js
 ├── firmware.js
@@ -197,7 +200,10 @@ diarahkan ke halaman panduan `/setup.html` sampai ada akun admin. Langkahnya:
 4. **ESP8266 (pintu RFID)** — sama seperti ESP32: IP, port, dan kunci API.
 5. **Bot Telegram (opsional)** — tempel token bot dari @BotFather dan Chat ID admin,
    lalu tekan **Kirim pesan uji** untuk memastikan bot bekerja.
-6. **Selesai** — layanan perangkat dijalankan dan admin langsung masuk dashboard.
+6. **AI Agent / Gemini (opsional)** — tempel kunci API dari Google AI Studio, pilih model,
+   lalu tekan **Uji kunci** untuk memastikan kuncinya diterima Google sebelum disimpan.
+   Kolom kunci yang dibiarkan kosong tidak menimpa kunci yang sudah tersimpan di `.env`.
+7. **Selesai** — layanan perangkat dijalankan dan admin langsung masuk dashboard.
 
 Panduan ini bisa dibuka lagi kapan saja dari tab **Pengaturan** (kartu paling atas,
 tombol **Buka panduan**).
@@ -215,6 +221,7 @@ tidak perlu lagi membuka Termux:
 | ESP32 | IP, port, kunci API, interval pemantauan, nama relay. Ada tombol **Uji koneksi**, **Kirim pengaturan ke perangkat**, dan **Mode setup (WiFi ESP)** |
 | ESP8266 (pintu) | IP, port, kunci API, interval pemantauan, waktu tambah kartu, notifikasi Telegram |
 | Bot Telegram | Aktif/nonaktif notifikasi, token bot, Chat ID admin |
+| AI Agent (Gemini) | Aktif/nonaktif AI Agent, kunci API Gemini, model Gemini. Ada tombol **Uji kunci ke Gemini** |
 | Akun admin | Username, password (perlu password yang sedang dipakai) |
 | Server & Web | Port web, masa berlaku login, folder penyimpanan, batas firmware OTA |
 | Batas alarm monitoring | Ambang tegangan sel, arus, estimasi daya AC |
@@ -290,9 +297,35 @@ TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 Setelah disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
 **Kirim pesan uji** memastikan token dan Chat ID benar.
 
-`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, dan `/web on`. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, `/web on`, dan `/ai <pertanyaan>`. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
 Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
+
+## AI Agent (Gemini)
+
+AI Agent menambahkan asisten berbasis Gemini yang dipakai lewat perintah `/ai <pertanyaan>`
+di Telegram. Ia punya "skill" (`skills.js`) untuk membaca status ESP32/pintu, menyalakan
+relay, membuka pintu, dan menjalankan perintah Termux, jadi kuncinya layak dianggap sensitif.
+
+Kunci API **gratis** dari Google AI Studio: <https://aistudio.google.com/apikey>. Ada dua cara
+mengisinya, keduanya menulis ke `.env` tanpa perlu restart:
+
+| Cara | Yang diisi |
+| --- | --- |
+| Setup awal `/setup.html` (langkah 6) | `AI_AGENT_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
+| Tab **Pengaturan** > kartu **AI Agent (Gemini)** | nilai yang sama, plus tombol **Uji kunci ke Gemini** |
+
+```env
+AI_AGENT_ENABLED=true
+GEMINI_API_KEY=AIza...
+GEMINI_MODEL=gemini-1.5-flash
+```
+
+Kalau `GEMINI_API_KEY` masih kosong, `/ai` balasnya adalah cara mengisinya (bukan error
+jaringan), dan log server menampilkan `[AI] GEMINI_API_KEY belum diisi...` saat server mulai.
+`AI_AGENT_ENABLED=false` menonaktifkan AI Agent tanpa menghapus kuncinya. Uji cepat dari
+browser: `GET /api/ai/status` (status + model) dan `POST /api/ai/test` (mengirim prompt
+pendek ke Gemini).
 
 ## Monitoring
 

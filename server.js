@@ -353,13 +353,15 @@ function printBanner() {
         list.forEach(ip => console.log(`Setup awal: http://${ip}:${port}/setup.html`));
         console.log('- Buka alamat itu di HP/PC (satu WiFi dengan Termux).');
         console.log('- Di halaman setup: buat username & password, isi IP/port/kunci API ESP32');
-        console.log('  dan ESP8266, lalu isi bot Telegram. .env diisi otomatis.');
+        console.log('  dan ESP8266, isi bot Telegram, lalu isi kunci API Gemini (untuk /ai).');
+        console.log('  Semua nilai di atas ditulis otomatis ke .env.');
         console.log('- Setelah selesai, dashboard bisa dibuka di http://' + list[0] + ':' + port);
     } else {
         list.forEach(ip => console.log(`Server aktif: http://${ip}:${port}`));
     }
     console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
     console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);
+    console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-1.5-flash') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
     storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
     console.log('=================================');
 }
