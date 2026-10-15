@@ -16,14 +16,24 @@ const { skills, systemPrompt } = require('./skills');
 // tab Pengaturan > AI Agent, keduanya menulis GEMINI_API_KEY ke .env.
 const KEY_HELP = 'GEMINI_API_KEY belum diisi. Isi di setup awal (langkah AI Agent) atau tab Pengaturan > AI Agent — kunci gratis dari Google AI Studio (aistudio.google.com/apikey).';
 
-const DEFAULT_MODEL = 'gemini-2.5-flash';
-const FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite'];
-const RETIRED_MODEL_RE = /^gemini-(1\.[05](-[a-z0-9.]+)?|pro(-vision)?)$/i;
+// Model default dan urutan cadangan. Akun/kunci API baru tidak lagi bisa memakai
+// seri gemini-2.x (2.5 hanya untuk proyek yang pernah aktif), jadi default-nya 3.5.
+const DEFAULT_MODEL = 'gemini-3.5-flash-lite';
+const FALLBACK_MODELS = ['gemini-3.5-flash-lite', 'gemini-3.1-flash-lite', 'gemini-3.6-flash'];
+// Model yang sudah pensiun / tidak dipakai lagi (1.x dan 2.x, serta gemini-pro) dialihkan ke DEFAULT_MODEL.
+const RETIRED_MODEL_RE = /^gemini-(1\.\d|2\.\d|pro(-vision)?)(-[a-z0-9.-]+)?$/i;
+// Google kadang menulis saran model pengganti di pesan error, mis. "...use models/gemini-3.5-flash-lite ...".
+const SUGGESTED_MODEL_RE = /use models\/([a-z0-9][a-z0-9.-]*)/i;
 
 function normalizeModel(m) {
     const raw = String(m || '').trim().replace(/^models\//i, '');
     if (!raw || RETIRED_MODEL_RE.test(raw)) return DEFAULT_MODEL;
     return raw;
+}
+
+function suggestedModel(msg) {
+    const m = String(msg || '').match(SUGGESTED_MODEL_RE);
+    return m ? m[1].replace(/\.+$/, '') : '';
 }
 
 function shouldFallback(status, msg) {
@@ -139,10 +149,13 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
 
     async function callModels(apiKey, primaryModel, body, timeoutMs) {
         const primary = normalizeModel(primaryModel);
-        const models = [primary, ...FALLBACK_MODELS.filter(m => m !== primary)];
+        const queue = [primary, ...FALLBACK_MODELS.filter(m => m !== primary)];
+        const tried = new Set();
         let lastErr = null;
-        for (let i = 0; i < models.length; i++) {
-            const m = models[i];
+        while (queue.length) {
+            const m = queue.shift();
+            if (tried.has(m)) continue;
+            tried.add(m);
             const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(apiKey)}`;
             const r = await fetch(url, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -153,6 +166,12 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
             const msg = (j && j.error && (j.error.message || j.error.status)) || ('Gemini HTTP ' + r.status);
             lastErr = new Error(`${msg} (model ${m})`);
             if (!shouldFallback(r.status, msg)) throw lastErr;
+            // Saran model dari Google dicoba lebih dulu (kalau belum pernah dicoba).
+            const s = suggestedModel(msg);
+            if (s) {
+                const ns = normalizeModel(s);
+                if (!tried.has(ns) && !queue.includes(ns)) queue.unshift(ns);
+            }
         }
         throw lastErr;
     }

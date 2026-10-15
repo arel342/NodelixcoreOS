@@ -241,7 +241,7 @@ test('setup: sebelum akun dibuat, siapa pun yang membuka halaman boleh mengisi',
 
 // Fake modul AI: menyimpan nilai terakhir + mencatat reload, seperti ai.js aslinya.
 function aiStub(saved = {}) {
-    const st = { enabled: true, apiKey: saved.apiKey || '', model: saved.model || 'gemini-2.5-flash', reloads: 0, tested: [] };
+    const st = { enabled: true, apiKey: saved.apiKey || '', model: saved.model || 'gemini-3.5-flash-lite', reloads: 0, tested: [] };
     return Object.assign(st, {
         cfg: () => ({ enabled: st.enabled, apiKey: st.apiKey, model: st.model }),
         reload: () => { st.reloads++; },
@@ -253,12 +253,12 @@ function aiStub(saved = {}) {
 test('setup: langkah AI menulis kunci + model Gemini ke .env lewat kelompok ai', () => {
     const ai = aiStub();
     const s = setupFixture({ deps: { ai } });
-    const r = s.post('/api/setup/ai', { enabled: true, apiKey: 'AQ.DemoKey123', model: 'gemini-2.5-flash' });
+    const r = s.post('/api/setup/ai', { enabled: true, apiKey: 'AQ.DemoKey123', model: 'gemini-3.5-flash-lite' });
     assert.equal(r.code, 200);
     assert.equal(r.body.success, true);
     assert.match(r.body.message, /Gemini/i, 'pesan sukses menyebut kunci Gemini, bukan sekadar "Pengaturan disimpan"');
     assert.equal(s.st.writes.GEMINI_API_KEY, 'AQ.DemoKey123');
-    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-2.5-flash');
+    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-3.5-flash-lite');
     assert.deepEqual(Array.from(r.body.changed).sort(), ['GEMINI_API_KEY', 'GEMINI_MODEL'], 'hanya kunci + model yang berubah');
     assert.ok(r.body.ai && typeof r.body.ai.hasKey === 'boolean', 'halaman menerima status kunci terbaru');
     assert.equal(ai.reloads, 1, 'modul AI dimuat ulang supaya nilai baru langsung dipakai');
@@ -275,10 +275,10 @@ test('setup: nama route lama /api/setup/gemini tetap berfungsi', () => {
 test('setup: kolom kunci yang dikosongkan tidak menghapus kunci yang sudah tersimpan', () => {
     const ai = aiStub({ apiKey: 'AQ.SudahTersimpan' });
     const s = setupFixture({ env: { GEMINI_API_KEY: 'AQ.SudahTersimpan' }, deps: { ai } });
-    const r = s.post('/api/setup/ai', { apiKey: '   ', model: 'gemini-2.5-flash' });
+    const r = s.post('/api/setup/ai', { apiKey: '   ', model: 'gemini-3.5-flash-lite' });
     assert.equal(r.code, 200);
     assert.notEqual(s.st.writes.GEMINI_API_KEY, '', 'kunci tidak boleh ditulis kosong');
-    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-2.5-flash', 'model tetap disimpan');
+    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-3.5-flash-lite', 'model tetap disimpan');
     assert.equal(r.body.ai.hasKey, true);
 });
 
@@ -302,12 +302,12 @@ test('setup: uji kunci memakai kunci yang diketik, tanpa menyimpannya', async ()
     const ai = aiStub();
     const s = setupFixture({ deps: { ai } });
     const res = response();
-    await s.routes['POST /api/setup/ai/test']({ body: { apiKey: 'AQ.Baru', model: 'gemini-2.5-flash' } }, res);
+    await s.routes['POST /api/setup/ai/test']({ body: { apiKey: 'AQ.Baru', model: 'gemini-3.5-flash-lite' } }, res);
     assert.equal(res.code, 200);
     assert.equal(res.body.reply, 'OK');
     assert.equal(ai.tested.length, 1, 'satu kali panggilan ke Gemini');
     assert.equal(ai.tested[0].apiKey, 'AQ.Baru', 'kunci yang diuji = yang diketik, bukan yang tersimpan');
-    assert.equal(ai.tested[0].model, 'gemini-2.5-flash');
+    assert.equal(ai.tested[0].model, 'gemini-3.5-flash-lite');
     assert.deepEqual(s.st.writes, {}, 'menguji kunci tidak menulis .env');
 });
 
@@ -326,11 +326,11 @@ test('setup: uji kunci tanpa modul AI dan tanpa kunci dilaporkan rapi', async ()
 });
 
 test('setup: status awal membuka kunci yang tersimpan, halaman lain tetap aman', () => {
-    const ai = aiStub({ apiKey: 'AQ.SudahTersimpan', model: 'gemini-2.5-flash' });
-    const s = setupFixture({ env: { GEMINI_API_KEY: 'AQ.SudahTersimpan', GEMINI_MODEL: 'gemini-2.5-flash' }, deps: { ai } });
+    const ai = aiStub({ apiKey: 'AQ.SudahTersimpan', model: 'gemini-3.5-flash-lite' });
+    const s = setupFixture({ env: { GEMINI_API_KEY: 'AQ.SudahTersimpan', GEMINI_MODEL: 'gemini-3.5-flash-lite' }, deps: { ai } });
     const st = s.get('/api/setup/status');
     assert.equal(st.body.ai.hasKey, true);
-    assert.equal(st.body.ai.model, 'gemini-2.5-flash');
+    assert.equal(st.body.ai.model, 'gemini-3.5-flash-lite');
 
     // akun sudah ada + belum login -> kunci disembunyikan dan langkah AI terkunci
     const locked = setupFixture({ env: { ADMIN_PASSWORD: 'rahasia123', GEMINI_API_KEY: 'AQ.Rahasia' }, deps: { ai } });
