@@ -236,3 +236,106 @@ test('setup: sebelum akun dibuat, siapa pun yang membuka halaman boleh mengisi',
     assert.equal(s.st.writes.TELEGRAM_CHAT_ID, '123456789');
     assert.equal(s.calls.restart, 1, 'bot Telegram dimuat ulang dengan nilai baru');
 });
+
+// ---------- Langkah AI Agent (kunci API Gemini) di setup awal ----------
+
+// Fake modul AI: menyimpan nilai terakhir + mencatat reload, seperti ai.js aslinya.
+function aiStub(saved = {}) {
+    const st = { enabled: true, apiKey: saved.apiKey || '', model: saved.model || 'gemini-1.5-flash', reloads: 0, tested: [] };
+    return Object.assign(st, {
+        cfg: () => ({ enabled: st.enabled, apiKey: st.apiKey, model: st.model }),
+        reload: () => { st.reloads++; },
+        start: () => true,
+        testKey: async o => { st.tested.push(o); if (!String(o.apiKey || st.apiKey).trim()) { const e = new Error('kunci kosong'); e.status = 400; throw e; } return 'OK'; }
+    });
+}
+
+test('setup: langkah AI menulis kunci + model Gemini ke .env lewat kelompok ai', () => {
+    const ai = aiStub();
+    const s = setupFixture({ deps: { ai } });
+    const r = s.post('/api/setup/ai', { enabled: true, apiKey: 'AIzaDemoKey123', model: 'gemini-2.5-flash' });
+    assert.equal(r.code, 200);
+    assert.equal(r.body.success, true);
+    assert.match(r.body.message, /Gemini/i, 'pesan sukses menyebut kunci Gemini, bukan sekadar "Pengaturan disimpan"');
+    assert.equal(s.st.writes.GEMINI_API_KEY, 'AIzaDemoKey123');
+    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-2.5-flash');
+    assert.deepEqual(Array.from(r.body.changed).sort(), ['GEMINI_API_KEY', 'GEMINI_MODEL'], 'hanya kunci + model yang berubah');
+    assert.ok(r.body.ai && typeof r.body.ai.hasKey === 'boolean', 'halaman menerima status kunci terbaru');
+    assert.equal(ai.reloads, 1, 'modul AI dimuat ulang supaya nilai baru langsung dipakai');
+});
+
+test('setup: nama route lama /api/setup/gemini tetap berfungsi', () => {
+    const ai = aiStub();
+    const s = setupFixture({ deps: { ai } });
+    const r = s.post('/api/setup/gemini', { apiKey: 'AIzaLama123' });
+    assert.equal(r.code, 200);
+    assert.equal(s.st.writes.GEMINI_API_KEY, 'AIzaLama123');
+});
+
+test('setup: kolom kunci yang dikosongkan tidak menghapus kunci yang sudah tersimpan', () => {
+    const ai = aiStub({ apiKey: 'AIzaSudahTersimpan' });
+    const s = setupFixture({ env: { GEMINI_API_KEY: 'AIzaSudahTersimpan' }, deps: { ai } });
+    const r = s.post('/api/setup/ai', { apiKey: '   ', model: 'gemini-2.5-flash' });
+    assert.equal(r.code, 200);
+    assert.notEqual(s.st.writes.GEMINI_API_KEY, '', 'kunci tidak boleh ditulis kosong');
+    assert.equal(s.st.writes.GEMINI_MODEL, 'gemini-2.5-flash', 'model tetap disimpan');
+    assert.equal(r.body.ai.hasKey, true);
+});
+
+test('setup: hanya mengirim status tanpa nilai baru tidak menulis apa pun', () => {
+    const ai = aiStub({ apiKey: 'AIzaAda' });
+    const s = setupFixture({ env: { GEMINI_API_KEY: 'AIzaAda' }, deps: { ai } });
+    const r = s.post('/api/setup/ai', { apiKey: '' });
+    assert.equal(r.code, 200);
+    assert.deepEqual(s.st.writes, {}, 'langkah yang dilewati tidak mengubah .env');
+    assert.equal(ai.reloads, 0);
+});
+
+test('setup: kunci Gemini yang tidak valid ditolak dengan pesan jelas', () => {
+    const s = setupFixture({ deps: { ai: aiStub() } });
+    assert.equal(s.post('/api/setup/ai', { apiKey: 'kunci ada spasi' }).code, 400);
+    assert.equal(s.post('/api/setup/ai', { apiKey: 'x'.repeat(65) }).code, 400);
+    assert.deepEqual(s.st.writes, {});
+});
+
+test('setup: uji kunci memakai kunci yang diketik, tanpa menyimpannya', async () => {
+    const ai = aiStub();
+    const s = setupFixture({ deps: { ai } });
+    const res = response();
+    await s.routes['POST /api/setup/ai/test']({ body: { apiKey: 'AIzaBaru', model: 'gemini-2.5-flash' } }, res);
+    assert.equal(res.code, 200);
+    assert.equal(res.body.reply, 'OK');
+    assert.equal(ai.tested.length, 1, 'satu kali panggilan ke Gemini');
+    assert.equal(ai.tested[0].apiKey, 'AIzaBaru', 'kunci yang diuji = yang diketik, bukan yang tersimpan');
+    assert.equal(ai.tested[0].model, 'gemini-2.5-flash');
+    assert.deepEqual(s.st.writes, {}, 'menguji kunci tidak menulis .env');
+});
+
+test('setup: uji kunci tanpa modul AI dan tanpa kunci dilaporkan rapi', async () => {
+    const noModule = setupFixture();
+    const a = response();
+    await noModule.routes['POST /api/setup/ai/test']({ body: { apiKey: 'AIzaBaru' } }, a);
+    assert.equal(a.code, 501);
+    assert.equal(a.body.success, false);
+
+    const empty = setupFixture({ deps: { ai: aiStub() } });
+    const b = response();
+    await empty.routes['POST /api/setup/ai/test']({ body: {} }, b);
+    assert.equal(b.code, 400, 'belum ada kunci sama sekali -> 400, bukan 502');
+    assert.equal(b.body.success, false);
+});
+
+test('setup: status awal membuka kunci yang tersimpan, halaman lain tetap aman', () => {
+    const ai = aiStub({ apiKey: 'AIzaSudahTersimpan', model: 'gemini-2.5-flash' });
+    const s = setupFixture({ env: { GEMINI_API_KEY: 'AIzaSudahTersimpan', GEMINI_MODEL: 'gemini-2.5-flash' }, deps: { ai } });
+    const st = s.get('/api/setup/status');
+    assert.equal(st.body.ai.hasKey, true);
+    assert.equal(st.body.ai.model, 'gemini-2.5-flash');
+
+    // akun sudah ada + belum login -> kunci disembunyikan dan langkah AI terkunci
+    const locked = setupFixture({ env: { ADMIN_PASSWORD: 'rahasia123', GEMINI_API_KEY: 'AIzaRahasia' }, deps: { ai } });
+    const l = locked.get('/api/setup/status');
+    assert.equal(l.body.ai.apiKey, '', 'kunci tidak dikirim ke pengunjung yang belum login');
+    assert.equal(l.body.ai.hasKey, true, 'keberadaan kunci tetap dilaporkan supaya kolom diberi petunjuk');
+    assert.equal(locked.post('/api/setup/ai', { apiKey: 'AIzaPencokok' }).code, 403);
+});

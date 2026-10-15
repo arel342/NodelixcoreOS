@@ -6,6 +6,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai }) => {
     // langsung berlaku tanpa menjalankan ulang server.
     const token = () => E('TELEGRAM_BOT_TOKEN', '');
     const aiMod = ai || null;
+    let welcomed = false;                      // sudah mengirim pesan sambutan atau belum
     const chatId = () => E('TELEGRAM_CHAT_ID', '');
     let offset = 0, running = false, timer = null;
     let offReason = '';                       // supaya pesan "dinonaktifkan" tidak berulang
@@ -253,9 +254,13 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai }) => {
         start,
         restart,
         test,
+        // Sekali saja per proses: setup awal memanggil welcome() dan startDevices()
+        // memanggilnya lewat telegram.start(), tanpa itu pengguna menerima 2 pesan.
         welcome() {
-            if (!token() || !chatId()) return Promise.resolve(false);
+            if (!token() || !chatId() || welcomed) return Promise.resolve(false);
+            welcomed = true;
             return send('👋 Selamat datang di NodelixcoreOS!\n✅ Bot siap. Gunakan /help untuk melihat perintah yang tersedia.').catch(e => {
+                welcomed = false;
                 console.error('[Telegram] Gagal mengirim pesan sambutan:', e.message);
                 return false;
             });

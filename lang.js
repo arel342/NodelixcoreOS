@@ -35,6 +35,12 @@ const DICT = {
         'set.pushFail': 'Gagal mengirim ke {dev}: {e}',
         'set.portalOk': '{dev} diminta masuk mode setup. Sambungkan HP ke WiFi "{ssid}" lalu buka http://192.168.4.1',
         'set.portalFail': 'Gagal meminta mode setup ke {dev}: {e}',
+        // ---- AI Agent (Gemini) ----
+        'set.aiOk': 'Kunci API Gemini tersimpan. AI Agent bisa dipakai lewat /ai di Telegram.',
+        'set.aiNoKey': 'Isi kunci API Gemini dulu (gratis dari Google AI Studio: aistudio.google.com/apikey).',
+        'set.aiTestOk': 'Gemini menjawab: {r}',
+        'set.aiTestFail': 'Gagal menghubungi Gemini: {e}',
+        'set.aiUnavailable': 'Modul AI Agent tidak tersedia di server ini.',
 
         // ---- Setup awal (wizard di browser) ----
         'setup.notDone': 'Setup awal belum selesai. Buka halaman setup lewat browser.',
@@ -229,6 +235,12 @@ const DICT = {
         'set.pushFail': 'Failed to send to {dev}: {e}',
         'set.portalOk': '{dev} was asked to enter setup mode. Connect your phone to WiFi "{ssid}" and open http://192.168.4.1',
         'set.portalFail': 'Failed to request setup mode on {dev}: {e}',
+        // ---- AI Agent (Gemini) ----
+        'set.aiOk': 'Gemini API key saved. The AI agent works through /ai in Telegram.',
+        'set.aiNoKey': 'Fill in the Gemini API key first (free from Google AI Studio: aistudio.google.com/apikey).',
+        'set.aiTestOk': 'Gemini replied: {r}',
+        'set.aiTestFail': 'Failed to reach Gemini: {e}',
+        'set.aiUnavailable': 'The AI agent module is not available on this server.',
 
         // ---- First-run setup (browser wizard) ----
         'setup.notDone': 'First-run setup is not finished. Open the setup page in your browser.',
@@ -423,6 +435,12 @@ const DICT = {
         'set.pushFail': '发送到 {dev} 失败：{e}',
         'set.portalOk': '已要求 {dev} 进入设置模式。请将手机连接到 WiFi“{ssid}”，然后打开 http://192.168.4.1',
         'set.portalFail': '无法让 {dev} 进入设置模式：{e}',
+        // ---- AI Agent (Gemini) ----
+        'set.aiOk': 'Gemini API 密钥已保存。可在 Telegram 使用 /ai 调用 AI Agent。',
+        'set.aiNoKey': '请先填写 Gemini API 密钥（可在 Google AI Studio 免费获取：aistudio.google.com/apikey）。',
+        'set.aiTestOk': 'Gemini 回复：{r}',
+        'set.aiTestFail': '无法连接 Gemini：{e}',
+        'set.aiUnavailable': '此服务器未提供 AI Agent 模块。',
 
         // ---- 首次设置（浏览器向导） ----
         'setup.notDone': '首次设置尚未完成。请在浏览器中打开设置页面。',

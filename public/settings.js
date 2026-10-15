@@ -6,9 +6,10 @@
 // dari browser tanpa membuka Termux.
 //
 //   GET  /api/settings              -> nilai sekarang (diisi ke kolom)
-//   POST /api/settings              -> simpan per kelompok (esp32, door, telegram, server, monitor)
+//   POST /api/settings              -> simpan per kelompok (esp32, door, telegram, ai, server, monitor)
 //   POST /api/settings/account      -> ubah username / password admin
 //   POST /api/settings/telegram/test-> kirim pesan uji
+//   POST /api/ai/test               -> uji kunci API Gemini ke model yang dipilih
 //   POST /api/settings/device/test  -> uji koneksi ke ESP
 //   POST /api/settings/device/push  -> kirim WiFi/IP/kunci API ke ESP lewat jaringan
 //   POST /api/settings/device/portal-> ESP masuk mode setup (WiFi sendiri + halaman web)
@@ -166,6 +167,31 @@
         </div>`;
     }
 
+    // Kartu AI Agent: kunci API Gemini + model. Kelompok "ai" di /api/settings menulis
+    // GEMINI_API_KEY / GEMINI_MODEL / AI_AGENT_ENABLED, lalu modul AI membacanya langsung.
+    function cardAi() {
+        const a = S.ai || {};
+        return `
+        <div class="cfg-card">
+            <div class="cfg-head"><b>${esc(t('cfg.ai'))}</b>${badge(a.enabled !== false && !!a.apiKey)}</div>
+            <p class="cfg-p">${esc(t('cfg.aid'))}</p>
+            <label class="cfg-sw"><input id="c-ai-on" type="checkbox" ${a.enabled !== false ? 'checked' : ''}>${esc(t('cfg.aiEnabled'))}</label>
+            <div class="cfg-row" style="margin-top:10px">
+                <label class="cfg-f">${esc(t('cfg.aiKey'))}<input id="c-ai-key" type="password" spellcheck="false" autocomplete="off" placeholder="AIza..." value="${esc(a.apiKey || '')}"></label>
+                <button class="cfg-b ghost mini" type="button" onclick="cfgCopy('c-ai-key')">${esc(t('cfg.copy'))}</button>
+            </div>
+            <div class="cfg-grid two" style="margin-top:10px">
+                <label class="cfg-f">${esc(t('cfg.aiModel'))}<input id="c-ai-model" type="text" spellcheck="false" autocomplete="off" placeholder="gemini-1.5-flash" value="${esc(a.model || '')}"></label>
+            </div>
+            <p class="cfg-hint">${esc(t('cfg.aiHow'))}</p>
+            <div class="cfg-btns">
+                <button class="cfg-b" type="button" onclick="cfgSave('ai')">${esc(t('cfg.save'))}</button>
+                <button class="cfg-b ghost" type="button" onclick="cfgTestAi()">${esc(t('cfg.aiTest'))}</button>
+            </div>
+            <div class="cfg-msg" id="c-msg-ai"></div>
+        </div>`;
+    }
+
     function cardTelegram() {
         const g = S.telegram;
         return `
@@ -264,6 +290,7 @@
             ${cardESP32()}
             ${cardDoor()}
             ${cardTelegram()}
+            ${cardAi()}
             ${cardAccount()}
             ${cardServer()}
             ${cardMonitor()}
@@ -307,6 +334,9 @@
         if (group === 'telegram') return {
             telegram: { alerts: chk('c-tg-alerts'), token: val('c-tg-token'), chatId: val('c-tg-chat') }
         };
+        if (group === 'ai') return {
+            ai: { enabled: chk('c-ai-on'), apiKey: val('c-ai-key'), model: val('c-ai-model') }
+        };
         if (group === 'server') return {
             server: {
                 port: val('c-s-port'), sessionHours: val('c-s-session'), storageFolder: val('c-s-storage'),
@@ -321,7 +351,7 @@
         };
         return {};
     }
-    const msgId = g => ({ esp32: 'c-msg-esp32', door: 'c-msg-door', telegram: 'c-msg-telegram', server: 'c-msg-server', monitor: 'c-msg-monitor' }[g] || '');
+    const msgId = g => ({ esp32: 'c-msg-esp32', door: 'c-msg-door', telegram: 'c-msg-telegram', ai: 'c-msg-ai', server: 'c-msg-server', monitor: 'c-msg-monitor' }[g] || '');
 
     window.cfgSave = async function (group) {
         const id = msgId(group);
@@ -374,6 +404,16 @@
             const j = await post('/api/settings/telegram/test', {});
             cfgMsg('c-msg-telegram', j.message || t('set.tgTestOk'), 'ok');
         } catch (e) { cfgMsg('c-msg-telegram', e.message, 'err'); }
+    };
+
+    // Uji kunci Gemini memakai nilai yang sedang diketik (belum tentu disimpan), jadi
+    // pesan "kunci salah" langsung kelihatan tanpa menulis ke .env lebih dulu.
+    window.cfgTestAi = async function () {
+        cfgMsg('c-msg-ai', '…', 'work');
+        try {
+            const j = await post('/api/ai/test', { apiKey: val('c-ai-key'), model: val('c-ai-model') });
+            cfgMsg('c-msg-ai', t('cfg.aiTestOk', { r: j.reply || '' }), 'ok');
+        } catch (e) { cfgMsg('c-msg-ai', e.message, 'err'); }
     };
 
     window.cfgPush = async function (device) {
