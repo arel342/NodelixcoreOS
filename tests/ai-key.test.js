@@ -17,8 +17,8 @@ function loadAi(env = {}, reply = 'OK') {
     const app = { get: (u, f) => { routes['GET ' + u] = f; }, post: (u, f) => { routes['POST ' + u] = f; } };
     const fetchImpl = async (url, opt) => {
         calls.push({ url, opt });
-        // Hanya kunci "AIzaBaik" yang diterima; kunci lain menjawab 403 seperti Google.
-        if (!url.includes('key=AIzaBaik')) return { ok: false, status: 403, json: async () => ({ error: { message: 'API key not valid' } }) };
+        // Hanya kunci "AQ.Baik" yang diterima; kunci lain menjawab 403 seperti Google.
+        if (!url.includes('key=AQ.Baik')) return { ok: false, status: 403, json: async () => ({ error: { message: 'API key not valid' } }) };
         return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: reply }] } }] }) };
     };
     const context = {
@@ -36,13 +36,13 @@ function loadAi(env = {}, reply = 'OK') {
 }
 
 test('ai: testKey memakai kunci dan model yang dikirim, bukan yang tersimpan', async () => {
-    const { ai, calls } = loadAi({ GEMINI_API_KEY: 'AIzaLama', GEMINI_MODEL: 'gemini-1.5-flash' });
-    const reply = await ai.testKey({ apiKey: 'AIzaBaik', model: 'gemini-2.5-flash' });
+    const { ai, calls } = loadAi({ GEMINI_API_KEY: 'AQ.Lama', GEMINI_MODEL: 'gemini-1.5-flash' });
+    const reply = await ai.testKey({ apiKey: 'AQ.Baik', model: 'gemini-2.5-flash' });
     assert.equal(reply, 'OK');
     assert.equal(calls.length, 1);
     assert.match(calls[0].url, /models\/gemini-2\.5-flash:generateContent/);
-    assert.match(calls[0].url, /key=AIzaBaik/);
-    assert.doesNotMatch(calls[0].url, /AIzaLama/, 'kunci lama tidak boleh ikut terkirim');
+    assert.match(calls[0].url, /key=AQ.Baik/);
+    assert.doesNotMatch(calls[0].url, /AQ.Lama/, 'kunci lama tidak boleh ikut terkirim');
 });
 
 test('ai: testKey tanpa kunci menolak dengan status 400 + petunjuk isi di setup', async () => {
@@ -58,7 +58,7 @@ test('ai: testKey tanpa kunci menolak dengan status 400 + petunjuk isi di setup'
 
 test('ai: error dari Gemini diteruskan beserta model yang dicoba', async () => {
     const { ai } = loadAi({}, 'OK');
-    await assert.rejects(() => ai.testKey({ apiKey: 'AIzaSalah123', model: 'gemini-2.5-flash' }), e => {
+    await assert.rejects(() => ai.testKey({ apiKey: 'AQ.Salah123', model: 'gemini-2.5-flash' }), e => {
         assert.match(e.message, /API key not valid/);
         assert.match(e.message, /gemini-2\.5-flash/);
         return true;
@@ -67,7 +67,7 @@ test('ai: error dari Gemini diteruskan beserta model yang dicoba', async () => {
 
 test('ai: POST /api/ai/test -> 200 dengan jawaban, 400 saat kunci kosong', async () => {
     const ok = loadAi({});
-    const r1 = await ok.post('/api/ai/test', { apiKey: 'AIzaBaik', model: 'gemini-2.5-flash' });
+    const r1 = await ok.post('/api/ai/test', { apiKey: 'AQ.Baik', model: 'gemini-2.5-flash' });
     assert.equal(r1.code, 200);
     assert.equal(r1.body.reply, 'OK');
 
@@ -86,7 +86,7 @@ test('ai: GET /api/ai/status melaporkan hasKey/ready untuk halaman setup dan Pen
     assert.equal(e.model, 'gemini-1.5-flash');
     assert.equal(e.skills.length, empty.ai.skills.length, 'daftar skill dipakai halaman untuk menampilkan kemampuan');
 
-    const filled = loadAi({ GEMINI_API_KEY: 'AIzaBaik', GEMINI_MODEL: 'gemini-2.5-flash' });
+    const filled = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-2.5-flash' });
     const b = await filled.get('/api/ai/status').then(r => r.body);
     assert.equal(b.hasKey, true);
     assert.equal(b.ready, true);

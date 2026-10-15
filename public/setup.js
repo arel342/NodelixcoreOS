@@ -133,7 +133,7 @@ async function wzLoad() {
     // Kunci lama tidak ikut dikirim (kolom dibiarkan kosong) supaya menyimpan langkah ini
     // tanpa mengetik apa pun tidak menimpa kunci yang sudah tersimpan di .env.
     $('in-ai-key').value = '';
-    $('in-ai-key').placeholder = ai.hasKey ? t('wz.aiStored') : 'AIza...';
+    $('in-ai-key').placeholder = ai.hasKey ? t('wz.aiStored') : 'AQ....';
     $('foot').textContent = `NodelixcoreOS ${s.server.version || ''} · Node ${s.server.node || ''} · ${s.server.env || '.env'}`;
 
     wzStep(1);

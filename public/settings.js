@@ -177,7 +177,7 @@
             <p class="cfg-p">${esc(t('cfg.aid'))}</p>
             <label class="cfg-sw"><input id="c-ai-on" type="checkbox" ${a.enabled !== false ? 'checked' : ''}>${esc(t('cfg.aiEnabled'))}</label>
             <div class="cfg-row" style="margin-top:10px">
-                <label class="cfg-f">${esc(t('cfg.aiKey'))}<input id="c-ai-key" type="password" spellcheck="false" autocomplete="off" placeholder="AIza..." value="${esc(a.apiKey || '')}"></label>
+                <label class="cfg-f">${esc(t('cfg.aiKey'))}<input id="c-ai-key" type="password" spellcheck="false" autocomplete="off" placeholder="AQ...." value="${esc(a.apiKey || '')}"></label>
                 <button class="cfg-b ghost mini" type="button" onclick="cfgCopy('c-ai-key')">${esc(t('cfg.copy'))}</button>
             </div>
             <div class="cfg-grid two" style="margin-top:10px">
