@@ -181,7 +181,12 @@
                 <button class="cfg-b ghost mini" type="button" onclick="cfgCopy('c-ai-key')">${esc(t('cfg.copy'))}</button>
             </div>
             <div class="cfg-grid two" style="margin-top:10px">
-                <label class="cfg-f">${esc(t('cfg.aiModel'))}<input id="c-ai-model" type="text" spellcheck="false" autocomplete="off" placeholder="gemini-1.5-flash" value="${esc(a.model || '')}"></label>
+                <label class="cfg-f">${esc(t('cfg.aiModel'))}<input id="c-ai-model" type="text" spellcheck="false" autocomplete="off" list="cfg-ai-models" placeholder="gemini-2.5-flash" value="${esc(a.model || '')}"></label>
+                <datalist id="cfg-ai-models">
+                    <option value="gemini-2.5-flash"></option>
+                    <option value="gemini-2.5-flash-lite"></option>
+                    <option value="gemini-2.0-flash"></option>
+                </datalist>
             </div>
             <p class="cfg-hint">${esc(t('cfg.aiHow'))}</p>
             <div class="cfg-btns">

@@ -16,6 +16,28 @@ const { skills, systemPrompt } = require('./skills');
 // tab Pengaturan > AI Agent, keduanya menulis GEMINI_API_KEY ke .env.
 const KEY_HELP = 'GEMINI_API_KEY belum diisi. Isi di setup awal (langkah AI Agent) atau tab Pengaturan > AI Agent — kunci gratis dari Google AI Studio (aistudio.google.com/apikey).';
 
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+const FALLBACK_MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite'];
+const RETIRED_MODEL_RE = /^gemini-(1\.[05](-[a-z0-9.]+)?|pro(-vision)?)$/i;
+
+function normalizeModel(m) {
+    const raw = String(m || '').trim().replace(/^models\//i, '');
+    if (!raw || RETIRED_MODEL_RE.test(raw)) return DEFAULT_MODEL;
+    return raw;
+}
+
+function shouldFallback(status, msg) {
+    if (status === 404 || status === 503 || status === 429) return true;
+    return /not found|not supported|deprecated|retired|no longer available|unavailable|overloaded/i.test(String(msg || ''));
+}
+
+function extractText(parts, sep = '\n') {
+    if (!Array.isArray(parts)) return '';
+    const nonThought = parts.filter(p => p && !p.thought && typeof p.text === 'string' && p.text.trim());
+    const list = nonThought.length ? nonThought : parts.filter(p => p && typeof p.text === 'string' && p.text.trim());
+    return list.map(p => p.text).join(sep).trim();
+}
+
 const SECRET = /(PASSWORD|PASSWD|TOKEN|API_?KEY|SECRET)/i;
 function childEnv() {
     const out = {};
@@ -58,7 +80,7 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         return {
             enabled: E('AI_AGENT_ENABLED', 'true') !== 'false',
             apiKey: E('GEMINI_API_KEY', ''),
-            model: E('GEMINI_MODEL', 'gemini-1.5-flash')
+            model: normalizeModel(E('GEMINI_MODEL', DEFAULT_MODEL))
         };
     }
 
@@ -115,24 +137,38 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         }
     }
 
+    async function callModels(apiKey, primaryModel, body, timeoutMs) {
+        const primary = normalizeModel(primaryModel);
+        const models = [primary, ...FALLBACK_MODELS.filter(m => m !== primary)];
+        let lastErr = null;
+        for (let i = 0; i < models.length; i++) {
+            const m = models[i];
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+            const r = await fetch(url, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs)
+            });
+            const j = await r.json().catch(() => null);
+            if (r.ok) return { json: j, model: m };
+            const msg = (j && j.error && (j.error.message || j.error.status)) || ('Gemini HTTP ' + r.status);
+            lastErr = new Error(`${msg} (model ${m})`);
+            if (!shouldFallback(r.status, msg)) throw lastErr;
+        }
+        throw lastErr;
+    }
+
     async function gemini(contents) {
         const c = cfg();
         if (!c.enabled) throw new Error('AI agent dinonaktifkan. Aktifkan di setup awal atau Pengaturan > AI Agent.');
         if (!c.apiKey) throw new Error(KEY_HELP);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(c.model)}:generateContent?key=${encodeURIComponent(c.apiKey)}`;
         const body = {
             system_instruction: { parts: [{ text: systemPrompt }] },
             contents,
             tools: [{ function_declarations: toolDeclarations }],
             tool_config: { function_calling_config: { mode: 'AUTO' } }
         };
-        const r = await fetch(url, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body), signal: AbortSignal.timeout(60000)
-        });
-        const j = await r.json();
-        if (!r.ok) throw new Error((j && j.error && j.error.message) || ('Gemini HTTP ' + r.status));
-        return j;
+        const { json } = await callModels(c.apiKey, c.model, body, 60000);
+        return json;
     }
 
     // Cek cepat satu kunci API: panggil model dengan prompt pendek. Kalau override
@@ -142,20 +178,11 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         const c = cfg();
         const apiKey = String(override.apiKey === undefined ? c.apiKey : override.apiKey).trim();
         if (!apiKey) { const e = new Error(KEY_HELP); e.status = 400; throw e; }
-        const model = String(override.model || c.model).trim();
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-        const r = await fetch(url, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'Balas singkat: OK' }] }] }),
-            signal: AbortSignal.timeout(30000)
-        });
-        const j = await r.json().catch(() => null);
-        if (!r.ok) {
-            const msg = (j && j.error && (j.error.message || j.error.status)) || ('Gemini HTTP ' + r.status);
-            throw new Error(`${msg} (model ${model})`);
-        }
+        const model = normalizeModel(override.model || c.model);
+        const body = { contents: [{ role: 'user', parts: [{ text: 'Balas singkat: OK' }] }] };
+        const { json: j } = await callModels(apiKey, model, body, 30000);
         const parts = ((((j || {}).candidates || [])[0] || {}).content || {}).parts || [];
-        const text = parts.map(p => p && p.text).filter(Boolean).join(' ').trim();
+        const text = extractText(parts, ' ');
         if (!text) throw new Error('Gemini menjawab kosong — pastikan model sudah diizinkan untuk kunci ini');
         return text;
     }
@@ -191,7 +218,7 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
                 contents.push({ role: 'user', parts: toolParts });
                 continue;
             }
-            const text = parts.map(p => p.text).filter(Boolean).join('\n').trim();
+            const text = extractText(parts, '\n');
             history.push({ role: 'user', parts: [{ text: userText }] });
             history.push({ role: 'model', parts: [{ text: text || '(tidak ada jawaban)' }] });
             if (history.length > 20) history.splice(0, history.length - 20);

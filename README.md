@@ -318,7 +318,7 @@ mengisinya, keduanya menulis ke `.env` tanpa perlu restart:
 ```env
 AI_AGENT_ENABLED=true
 GEMINI_API_KEY=AQ....
-GEMINI_MODEL=gemini-1.5-flash
+GEMINI_MODEL=gemini-2.5-flash
 ```
 
 Kalau `GEMINI_API_KEY` masih kosong, `/ai` balasnya adalah cara mengisinya (bukan error
