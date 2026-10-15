@@ -317,7 +317,7 @@ mengisinya, keduanya menulis ke `.env` tanpa perlu restart:
 
 ```env
 AI_AGENT_ENABLED=true
-GEMINI_API_KEY=AIza...
+GEMINI_API_KEY=AQ....
 GEMINI_MODEL=gemini-1.5-flash
 ```
 
