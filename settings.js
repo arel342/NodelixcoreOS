@@ -54,8 +54,8 @@ const vNum = (min, max, k) => v => { const n = parseFloat(v); if (!Number.isFini
 const vChat = v => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!CHAT_RE.test(v)) throw bad(T('set.badChat')); return v; };
 const vTok = v => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!KEY_RE.test(v) || v.length < 8) throw bad(T('set.badKey', { k: 'TELEGRAM_BOT_TOKEN' })); return v; };
 const vBool = v => bool(v) ? 'true' : 'false';
-const DEFAULT_AI_MODEL = 'gemini-2.5-flash';
-const RETIRED_AI_MODEL_RE = /^gemini-(1\.[05](-[a-z0-9.]+)?|pro(-vision)?)$/i;
+const DEFAULT_AI_MODEL = 'gemini-3.5-flash-lite';
+const RETIRED_AI_MODEL_RE = /^gemini-(1\.\d|2\.\d|pro(-vision)?)(-[a-z0-9.-]+)?$/i;
 const normAiModel = v => { const s = String(v == null ? '' : v).trim().replace(/^models\//i, ''); return (!s || RETIRED_AI_MODEL_RE.test(s)) ? DEFAULT_AI_MODEL : s; };
 
 // ---------- Daftar nilai yang boleh diubah dari web ----------
