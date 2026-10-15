@@ -1,10 +1,11 @@
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const WAIT_MS = 5000;
 
-module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
+module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai }) => {
     // Token & chat ID dibaca saat dipakai, supaya perubahan dari web (Pengaturan > Telegram)
     // langsung berlaku tanpa menjalankan ulang server.
     const token = () => E('TELEGRAM_BOT_TOKEN', '');
+    const aiMod = ai || null;
     const chatId = () => E('TELEGRAM_CHAT_ID', '');
     let offset = 0, running = false, timer = null;
     let offReason = '';                       // supaya pesan "dinonaktifkan" tidak berulang
@@ -50,7 +51,8 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
         '/addcard [nama] — tambah kartu; tempelkan kartu saat diminta',
         '/cancelcard — batalkan tambah kartu',
         '/web off|on — matikan/nyalakan hanya web dan WebSocket',
-        '/help — tampilkan bantuan'
+        '/help — tampilkan bantuan',
+        '/ai <pertanyaan> — tanya AI Agent (Gemini)'
     ].join('\n');
 
     function batteryText() {
@@ -96,6 +98,18 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
             if (cmd === 'status') return send(statusText(), message.chat.id);
             if (cmd === 'battery') return send(batteryText(), message.chat.id);
             if (cmd === 'dht') return send(dhtText(), message.chat.id);
+
+            if (cmd === 'ai' || cmd === 'ask') {
+                const q = args || '';
+                if (!q) return send('Format: /ai <pertanyaan>', message.chat.id);
+                if (!aiMod || typeof aiMod.handleMessage !== 'function') return send('AI agent belum tersedia.', message.chat.id);
+                try {
+                    const reply = await aiMod.handleMessage(q, message.chat.id);
+                    return send(reply || '(tidak ada jawaban)', message.chat.id);
+                } catch (e) {
+                    return send('⚠️ AI gagal: ' + e.message, message.chat.id);
+                }
+            }
 
             if (cmd === 'relay') {
                 const m = /^(all|[1-9]\d*)\s+(on|off)$/i.exec(args);
@@ -167,6 +181,20 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled }) => {
                     console.warn(chatId()
                         ? `[Telegram] Perintah diabaikan dari chat yang tidak diizinkan (${message.chat.id}).`
                         : `[Telegram] Isi TELEGRAM_CHAT_ID=${message.chat.id} (web: Pengaturan > Telegram) untuk mengizinkan bot bagi chat pribadi ini.`);
+                    continue;
+                }
+                const text = String(message.text || '').trim();
+                if (!text.startsWith('/')) {
+                    if (aiMod && typeof aiMod.handleMessage === 'function') {
+                        try {
+                            const reply = await aiMod.handleMessage(text, message.chat.id);
+                            if (reply) await send(reply, message.chat.id);
+                        } catch (e) {
+                            await send('⚠️ AI gagal: ' + e.message, message.chat.id);
+                        }
+                    } else {
+                        await send('Kirim /help untuk bantuan. (AI agent belum tersedia)', message.chat.id);
+                    }
                     continue;
                 }
                 await command(message);

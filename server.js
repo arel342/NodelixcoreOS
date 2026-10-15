@@ -117,7 +117,7 @@ app.post('/api/settings/lang', (req, res) => {
     res.json({ success: true, message: T('set.saved') });
 });
 // Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/uploads'], requireAuth);
+app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/api/ai', '/uploads'], requireAuth);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -222,7 +222,7 @@ const firmware = require('./firmware')({ app, broadcast, notify, esp32, door });
 // ================= MONITOR SISTEM (CPU/RAM/flash disk) =================
 const system = require('./system')({ app, broadcast });
 // ================= TERMINAL COMMAND (Pengaturan > Terminal) =================
-require('./terminal')({ app, saveEnv });
+const terminalMod = require('./terminal')({ app, saveEnv });
 
 let webRunning = false, servicesStarted = false;
 function setWebEnabled(enabled) {
@@ -250,16 +250,17 @@ function setWebEnabled(enabled) {
     });
 }
 
-const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning });
+const ai = require('./ai')({ app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, auth, broadcast, notify });
+const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning, ai });
 
 // ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
 // Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
 // Telegram, batas alarm monitoring, sampai akun admin. Tidak perlu mengedit .env di Termux.
 const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
-const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, auth });
+const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, ai, auth });
 
 // ================= SETUP AWAL (halaman /setup.html) =================
-require('./setup')({ app, saveEnv, settings, esp32, door, telegram, auth, startDevices });
+require('./setup')({ app, saveEnv, settings, esp32, door, telegram, ai, auth, startDevices });
 
 wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
@@ -338,6 +339,7 @@ function startDevices() {
     door.start();
     system.start();
     telegram.start().then(() => telegram.welcome());
+    try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[AI]', e.message); }
 }
 
 function printBanner() {

@@ -74,6 +74,11 @@ const FIELDS = {
         token: { env: 'TELEGRAM_BOT_TOKEN', get: () => E('TELEGRAM_BOT_TOKEN', ''), set: vTok },
         chatId: { env: 'TELEGRAM_CHAT_ID', get: () => E('TELEGRAM_CHAT_ID', ''), set: vChat }
     },
+    ai: {
+        enabled: { env: 'AI_AGENT_ENABLED', get: () => E('AI_AGENT_ENABLED', 'true') !== 'false', set: vBool },
+        apiKey: { env: 'GEMINI_API_KEY', get: () => E('GEMINI_API_KEY', ''), set: v => vKey(v, 'GEMINI_API_KEY') },
+        model: { env: 'GEMINI_MODEL', get: () => E('GEMINI_MODEL', 'gemini-1.5-flash'), set: v => vText(v, 64, 'GEMINI_MODEL') }
+    },
     server: {
         port: { env: 'PORT', get: () => N('PORT', 3000), set: v => vPort(v, 'PORT') },
         sessionHours: { env: 'SESSION_TTL_HOURS', get: () => N('SESSION_TTL_HOURS', 24), set: vNum(1, 720, 'SESSION_TTL_HOURS') },
@@ -104,7 +109,7 @@ const devKey = d => Object.keys(DEVICES).includes(d) ? d : null;
 
 const safeJson = async r => { try { return await r.json(); } catch { return null; } };
 
-module.exports = ({ app, saveEnv, esp32, door, telegram, auth }) => {
+module.exports = ({ app, saveEnv, esp32, door, telegram, ai, auth }) => {
     // ---------- Baca / tulis pengaturan ----------
     const readGroup = g => {
         const out = {};
@@ -134,6 +139,7 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, auth }) => {
         if (groups.has('esp32')) restart('ESP32', () => esp32.reload());
         if (groups.has('door')) restart('pintu', () => door.reload());
         if (groups.has('telegram')) restart('Telegram', () => telegram.restart());
+        if (groups.has('ai') && ai && typeof ai.reload === 'function') restart('AI', () => ai.reload());
         return { changed: plan.map(p => p.env), groups: [...groups] };
     }
 

@@ -18,7 +18,7 @@ const T = require('./lang');
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const N = (k, d) => { const v = parseFloat(process.env[k]); return Number.isFinite(v) ? v : d; };
 
-module.exports = ({ app, saveEnv, settings, esp32, door, telegram, auth, startDevices }) => {
+module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, startDevices }) => {
     const required = () => !E('ADMIN_PASSWORD', '');
     const allowed = req => required() || auth.isAuthed(req);
 
@@ -35,6 +35,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, auth, startDe
             esp32: { ip: s.esp32.ip, port: s.esp32.port, apiKey: hide ? '' : s.esp32.apiKey },
             door: { ip: s.door.ip, port: s.door.port, apiKey: hide ? '' : s.door.apiKey, enrollSec: s.door.enrollSec },
             telegram: { alerts: s.telegram.alerts, token: hide ? '' : s.telegram.token, chatId: hide ? '' : s.telegram.chatId },
+            ai: { enabled: s.ai ? s.ai.enabled : true, apiKey: hide ? '' : (s.ai ? s.ai.apiKey : ''), model: s.ai ? s.ai.model : 'gemini-1.5-flash' },
             language: E('LANGUAGE', 'id')
         };
     }
@@ -112,6 +113,34 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, auth, startDe
         }
     });
 
+    // Langkah AI Agent (Gemini) — opsional
+    app.post('/api/setup/ai', (req, res) => {
+        if (!guard(req, res)) return;
+        const b = req.body || {};
+        const part = {};
+        for (const k of ['enabled', 'apiKey', 'model']) if (b[k] !== undefined) part[k] = b[k];
+        try {
+            settings.apply({ ai: part });
+            if (ai && typeof ai.reload === 'function') ai.reload();
+            res.json({ success: true, message: T('set.ok') });
+        } catch (e) {
+            res.status(e.status || 400).json({ success: false, message: e.message || T('set.badBody') });
+        }
+    });
+    app.post('/api/setup/gemini', (req, res) => {
+        if (!guard(req, res)) return;
+        const b = req.body || {};
+        const part = {};
+        for (const k of ['enabled', 'apiKey', 'model']) if (b[k] !== undefined) part[k] = b[k];
+        try {
+            settings.apply({ ai: part });
+            if (ai && typeof ai.reload === 'function') ai.reload();
+            res.json({ success: true, message: T('set.ok') });
+        } catch (e) {
+            res.status(e.status || 400).json({ success: false, message: e.message || T('set.badBody') });
+        }
+    });
+
     // Langkah 6 — selesai: aktifkan layanan perangkat, tandai setup selesai, login otomatis
     app.post('/api/setup/finish', async (req, res) => {
         if (!guard(req, res)) return;
@@ -119,6 +148,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, auth, startDe
 
         if (E('SETUP_DONE', '') !== '1') saveEnv('SETUP_DONE', '1');
         try { startDevices(); } catch (e) { console.error('[Setup]', e.message); }
+        try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[Setup]', e.message); }
         try { await telegram.welcome(); } catch { }
         auth.createSession(res);                                   // langsung masuk dashboard tanpa login ulang
         res.json({ success: true, message: T('setup.ok'), redirect: '/' });
