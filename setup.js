@@ -39,7 +39,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
             esp32: { ip: s.esp32.ip, port: s.esp32.port, apiKey: hide ? '' : s.esp32.apiKey },
             door: { ip: s.door.ip, port: s.door.port, apiKey: hide ? '' : s.door.apiKey, enrollSec: s.door.enrollSec },
             telegram: { alerts: s.telegram.alerts, token: hide ? '' : s.telegram.token, chatId: hide ? '' : s.telegram.chatId },
-            ai: { enabled: s.ai ? s.ai.enabled : true, apiKey: hide ? '' : (s.ai ? s.ai.apiKey : ''), hasKey: !!(s.ai && s.ai.apiKey), model: s.ai ? s.ai.model : 'gemini-1.5-flash' },
+            ai: { enabled: s.ai ? s.ai.enabled : true, apiKey: hide ? '' : (s.ai ? s.ai.apiKey : ''), hasKey: !!(s.ai && s.ai.apiKey), model: s.ai ? s.ai.model : 'gemini-2.5-flash' },
             language: E('LANGUAGE', 'id')
         };
     }
@@ -126,7 +126,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         const c = (ai && typeof ai.cfg === 'function') ? ai.cfg() : {
             enabled: E('AI_AGENT_ENABLED', 'true') !== 'false',
             apiKey: E('GEMINI_API_KEY', ''),
-            model: E('GEMINI_MODEL', 'gemini-1.5-flash')
+            model: E('GEMINI_MODEL', 'gemini-2.5-flash')
         };
         return { enabled: c.enabled !== false, hasKey: !!c.apiKey, model: c.model };
     }

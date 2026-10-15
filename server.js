@@ -25,6 +25,10 @@ function saveEnv(key, value) {
     fs.writeFileSync(ENV_FILE, txt);
     process.env[key] = value;   // langsung dipakai proses yang berjalan
 }
+if (/^gemini-(1\.[05](-[a-z0-9.]+)?|pro(-vision)?)$/i.test(process.env.GEMINI_MODEL || '')) {
+    if (fs.existsSync(ENV_FILE)) saveEnv('GEMINI_MODEL', 'gemini-2.5-flash');
+    else process.env.GEMINI_MODEL = 'gemini-2.5-flash';
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -361,7 +365,7 @@ function printBanner() {
     }
     console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
     console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);
-    console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-1.5-flash') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
+    console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-2.5-flash') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
     storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
     console.log('=================================');
 }

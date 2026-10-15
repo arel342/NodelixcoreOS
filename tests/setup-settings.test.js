@@ -241,7 +241,7 @@ test('setup: sebelum akun dibuat, siapa pun yang membuka halaman boleh mengisi',
 
 // Fake modul AI: menyimpan nilai terakhir + mencatat reload, seperti ai.js aslinya.
 function aiStub(saved = {}) {
-    const st = { enabled: true, apiKey: saved.apiKey || '', model: saved.model || 'gemini-1.5-flash', reloads: 0, tested: [] };
+    const st = { enabled: true, apiKey: saved.apiKey || '', model: saved.model || 'gemini-2.5-flash', reloads: 0, tested: [] };
     return Object.assign(st, {
         cfg: () => ({ enabled: st.enabled, apiKey: st.apiKey, model: st.model }),
         reload: () => { st.reloads++; },

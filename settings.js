@@ -54,6 +54,9 @@ const vNum = (min, max, k) => v => { const n = parseFloat(v); if (!Number.isFini
 const vChat = v => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!CHAT_RE.test(v)) throw bad(T('set.badChat')); return v; };
 const vTok = v => { v = String(v == null ? '' : v).trim(); if (!v) return ''; if (!KEY_RE.test(v) || v.length < 8) throw bad(T('set.badKey', { k: 'TELEGRAM_BOT_TOKEN' })); return v; };
 const vBool = v => bool(v) ? 'true' : 'false';
+const DEFAULT_AI_MODEL = 'gemini-2.5-flash';
+const RETIRED_AI_MODEL_RE = /^gemini-(1\.[05](-[a-z0-9.]+)?|pro(-vision)?)$/i;
+const normAiModel = v => { const s = String(v == null ? '' : v).trim().replace(/^models\//i, ''); return (!s || RETIRED_AI_MODEL_RE.test(s)) ? DEFAULT_AI_MODEL : s; };
 
 // ---------- Daftar nilai yang boleh diubah dari web ----------
 // env  : nama variabel di .env      get : nilai sekarang      set : validasi + nilai baru
@@ -82,7 +85,7 @@ const FIELDS = {
     ai: {
         enabled: { env: 'AI_AGENT_ENABLED', get: () => E('AI_AGENT_ENABLED', 'true') !== 'false', set: vBool },
         apiKey: { env: 'GEMINI_API_KEY', get: () => E('GEMINI_API_KEY', ''), set: v => vKey(v, 'GEMINI_API_KEY') },
-        model: { env: 'GEMINI_MODEL', get: () => E('GEMINI_MODEL', 'gemini-1.5-flash'), set: v => vText(v, 64, 'GEMINI_MODEL') }
+        model: { env: 'GEMINI_MODEL', raw: () => E('GEMINI_MODEL', ''), get: () => normAiModel(E('GEMINI_MODEL', DEFAULT_AI_MODEL)), set: v => normAiModel(vText(v, 64, 'GEMINI_MODEL')) }
     },
     server: {
         port: { env: 'PORT', get: () => N('PORT', 3000), set: v => vPort(v, 'PORT') },
@@ -133,7 +136,8 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, ai, auth }) => {
                 const f = FIELDS[g][name];
                 if (!f) continue;                                   // field tak dikenal -> abaikan
                 const next = f.set(value);
-                if (String(f.get()) !== String(next)) plan.push({ env: f.env, value: next });
+                const cur = f.raw ? f.raw() : f.get();
+                if (String(cur) !== String(next)) plan.push({ env: f.env, value: next });
                 groups.add(g);
             }
         }

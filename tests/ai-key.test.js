@@ -83,7 +83,7 @@ test('ai: GET /api/ai/status melaporkan hasKey/ready untuk halaman setup dan Pen
     assert.equal(e.enabled, true);
     assert.equal(e.hasKey, false);
     assert.equal(e.ready, false);
-    assert.equal(e.model, 'gemini-1.5-flash');
+    assert.equal(e.model, 'gemini-2.5-flash');
     assert.equal(e.skills.length, empty.ai.skills.length, 'daftar skill dipakai halaman untuk menampilkan kemampuan');
 
     const filled = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-2.5-flash' });
@@ -91,6 +91,34 @@ test('ai: GET /api/ai/status melaporkan hasKey/ready untuk halaman setup dan Pen
     assert.equal(b.hasKey, true);
     assert.equal(b.ready, true);
     assert.equal(b.model, 'gemini-2.5-flash');
+
+    const legacy = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-1.5-flash' });
+    const l = await legacy.get('/api/ai/status').then(r => r.body);
+    assert.equal(l.model, 'gemini-2.5-flash', 'model lama gemini-1.5-flash otomatis diganti ke gemini-2.5-flash');
+});
+
+test('ai: fallback otomatis ke gemini-2.0-flash saat model utama gagal (404)', async () => {
+    const calls = [];
+    const context = {
+        module: { exports: {} }, __dirname: root, console,
+        require: n => require(require.resolve(n, { paths: [root] })),
+        process: { env: { LANGUAGE: 'id', GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-2.5-flash' }, uptime: () => 1 },
+        fetch: async url => {
+            calls.push(url);
+            if (url.includes('models/gemini-2.5-flash:')) {
+                return { ok: false, status: 404, json: async () => ({ error: { message: 'Model not found' } }) };
+            }
+            return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Jawaban fallback' }] } }] }) };
+        },
+        AbortSignal, setTimeout, clearTimeout
+    };
+    vm.runInNewContext(source('ai.js'), context);
+    const ai = context.module.exports({});
+    const reply = await ai.handleMessage('cek status', 'chat-fallback');
+    assert.equal(reply, 'Jawaban fallback');
+    assert.equal(calls.length, 2);
+    assert.match(calls[0], /models\/gemini-2\.5-flash:generateContent/);
+    assert.match(calls[1], /models\/gemini-2\.0-flash:generateContent/);
 });
 
 test('ai: handleMessage tanpa kunci mengarahkan ke setup awal, bukan error jaringan', async () => {
