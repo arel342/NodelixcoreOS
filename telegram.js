@@ -113,10 +113,12 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai }) => {
             }
 
             if (cmd === 'relay') {
-                const m = /^(all|[1-9]\d*)\s+(on|off)$/i.exec(args);
+                const m = /^(all|semua|1\s*[&,-]\s*2|[1-9]\d*)\s+(on|off)$/i.exec(args);
                 if (!m) return send('Format: /relay <nomor|all> <on|off>', message.chat.id);
-                await esp32.setRelay(m[1].toLowerCase() === 'all' ? 'all' : Number(m[1]), m[2].toLowerCase() === 'on');
-                return send(`✅ Relay ${m[1]} ${m[2].toUpperCase()}.`, message.chat.id);
+                const rawTarget = m[1].toLowerCase();
+                const target = (rawTarget === 'all' || rawTarget === 'semua') ? 'all' : /^1\s*[&,-]\s*2$/.test(rawTarget) ? '1&2' : Number(rawTarget);
+                await esp32.setRelay(target, m[2].toLowerCase() === 'on');
+                return send(`✅ Relay ${target === '1&2' ? '1 & 2' : m[1]} ${m[2].toUpperCase()}.`, message.chat.id);
             }
 
             if (cmd === 'door') {

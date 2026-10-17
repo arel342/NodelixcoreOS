@@ -88,7 +88,7 @@
             </div>
             <div class="cfg-grid two" style="margin-top:10px">
                 <label class="cfg-f">${esc(t('cfg.pollMs'))}<input id="c-e32-poll" type="number" min="200" max="60000" step="100" value="${esc(String(num(e.pollMs)))}"></label>
-                <label class="cfg-f">${esc(t('cfg.labels'))}<input id="c-e32-labels" type="text" value="${esc(e.labels)}" placeholder="Relay 1, Relay 3, Relay 4"></label>
+                <label class="cfg-f">${esc(t('cfg.labels'))}<input id="c-e32-labels" type="text" value="${esc(e.labels)}" placeholder="Relay 1 &amp; 2, Relay 3, Relay 4"></label>
             </div>
             <div class="cfg-btns">
                 <button class="cfg-b" type="button" onclick="cfgSave('esp32')">${esc(t('cfg.save'))}</button>
