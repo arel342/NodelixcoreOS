@@ -345,7 +345,7 @@ AC_POWER_FACTOR=0.80
 ## Relay
 
 ```env
-RELAY_LABELS=Relay 1
+RELAY_LABELS=Relay 1 & 2, Relay 3, Relay 4
 ```
 
 ## Bahasa
@@ -529,6 +529,9 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
   * Relay 1 & 2 (Paralel) ➔ `GPIO 26`
   * Relay 3 ➔ `GPIO 27`
   * Relay 4 ➔ `GPIO 32`
+  * Keluaran Pendamping Relay 1 & 2 *(Active HIGH)*:
+    * Relay 1 & 2 ON ➔ `GPIO 23` ON (`HIGH`), `GPIO 22` OFF (`LOW`)
+    * Relay 1 & 2 OFF ➔ `GPIO 22` ON (`HIGH`), `GPIO 23` OFF (`LOW`)
 * **module DHT11**:
   *DHT11 ➔ 'GPIO 4'
 

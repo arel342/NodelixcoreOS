@@ -106,8 +106,10 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
             }
             case 'set_relay': {
                 if (!esp32 || typeof esp32.setRelay !== 'function') throw new Error('ESP32 tidak tersedia');
-                await esp32.setRelay(String(args.id).toLowerCase() === 'all' ? 'all' : Number(args.id), !!args.state);
-                return { ok: true };
+                const rawId = String(args.id == null ? '' : args.id).trim();
+                const target = /^(all|semua)$/i.test(rawId) ? 'all' : /^(?:r(?:elay)?\s*)?1\s*[&,-]\s*2$/i.test(rawId) ? '1&2' : (Number.isFinite(Number(rawId)) && rawId !== '' ? Number(rawId) : rawId);
+                const snap = await esp32.setRelay(target, args.state);
+                return { ok: true, relays: snap && snap.relays, aux: snap && snap.aux };
             }
             case 'open_door': {
                 if (!door || typeof door.open !== 'function') throw new Error('Lock door tidak tersedia');

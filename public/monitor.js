@@ -85,12 +85,14 @@ function renderMonitor(s) {
     }
     s.relays.forEach((r, k) => {
         const el = box.children[k];
+        el.dataset.id = String(r.id);
+        el.onclick = () => toggleRelay(r.id);
         el.setAttribute('aria-pressed', r.on ? 'true' : 'false');
         el.querySelector('b').textContent = r.name;
         el.querySelector('small').textContent = `GPIO ${r.pin} · ${r.on ? t('mon.on') : t('mon.off')}`;
         el.disabled = !s.online;
     });
-    // Keluaran pendamping Relay 1 & 2: GPIO 12 = ON, GPIO 13 = OFF (selalu berlawanan)
+    // Keluaran pendamping Relay 1 & 2: GPIO 23 = ON, GPIO 22 = OFF (aktif HIGH, selalu berlawanan)
     const ax = s.aux;
     $m('m-aux').textContent = ax
         ? `${t('mon.aux')}: GPIO ${ax.on_pin} ${ax.on ? t('mon.on') : t('mon.off')} · GPIO ${ax.off_pin} ${ax.off ? t('mon.on') : t('mon.off')}`
@@ -138,13 +140,21 @@ function renderMonitor(s) {
 }
 
 async function toggleRelay(id) {
-    const r = mon.snap.relays.find(x => x.id === id);
+    if (!mon.snap || !Array.isArray(mon.snap.relays)) return;
+    const r = mon.snap.relays.find(x => String(x.id) === String(id));
     const el = document.querySelector(`#m-relays [data-id="${id}"]`);
+    if (!r || !el) return;
     el.classList.add('wait');
-    await post('/api/esp32/relay', { id, state: !r.on }, true);
+    const j = await post('/api/esp32/relay', { id: r.id, state: !r.on }, true);
+    if (j && j.relays && mon.snap) renderMonitor({ ...mon.snap, relays: j.relays, aux: j.aux !== undefined ? j.aux : mon.snap.aux });
     el.classList.remove('wait');
 }
-async function relayAllOff() { if (await uiConfirm(t('mon.allOffMsg'), { title: t('mon.allOffTitle'), ok: t('mon.allOffOk'), danger: true })) post('/api/esp32/relay', { id: 'all', state: false }, true); }
+async function relayAllOff() {
+    if (await uiConfirm(t('mon.allOffMsg'), { title: t('mon.allOffTitle'), ok: t('mon.allOffOk'), danger: true })) {
+        const j = await post('/api/esp32/relay', { id: 'all', state: false }, true);
+        if (j && j.relays && mon.snap) renderMonitor({ ...mon.snap, relays: j.relays, aux: j.aux !== undefined ? j.aux : mon.snap.aux });
+    }
+}
 function calTap(id) { post('/api/esp32/calibrate', { type: 'tap', id, actual: document.querySelector(`#m-calrows [data-id="${id}"] input`).value }); }
 function calI(type) { post('/api/esp32/calibrate', { type, actual: $m('m-igain').value }); }
 async function calReset() { if (await uiConfirm(t('mon.calResetMsg'), { title: t('mon.calResetTitle'), ok: t('mon.calResetOk'), danger: true })) post('/api/esp32/calibrate', { type: 'reset' }); }

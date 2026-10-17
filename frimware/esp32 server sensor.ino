@@ -3,7 +3,7 @@
   - Tegangan baterai Li-ion/LiPo 3S lewat pembagi tegangan (ADC1)
   - Arus AC lewat ACS712-20A (true RMS + filter)
   - Relay 4 channel (relay 1 & 2 digabung di GPIO 26)
-  - Keluaran pendamping Relay 1 & 2: GPIO 12 (ON) dan GPIO 13 (OFF)
+  - Keluaran pendamping Relay 1 & 2: GPIO 23 (ON) dan GPIO 22 (OFF), aktif HIGH
   - Suhu & kelembapan DHT11 (GPIO 4), bit-bang tanpa library tambahan
   - Server (Termux) mengambil data lewat IP: GET /api/data, POST /api/relay
   - OTA sejak v1.2 (POST /api/ota)
@@ -155,11 +155,14 @@ Tap taps[] = {
 #define RELAY_ACTIVE_LOW 1
 struct Relay { const char* name; uint8_t pin; bool on; };
 Relay relays[] = { {"Relay 1 & 2", 26, false}, {"Relay 3", 27, false}, {"Relay 4", 32, false} };
+const uint8_t RELAY_IDS[] = {1, 3, 4};
 const int NR = sizeof(relays) / sizeof(relays[0]);
 
-// --- Keluaran pendamping Relay 1 & 2
-#define PIN_AUX_ON      12
-#define PIN_AUX_OFF     13
+// --- Keluaran pendamping Relay 1 & 2 (aktif HIGH, selalu berlawanan):
+//     Relay 1 & 2 ON  -> GPIO 23 ON (HIGH), GPIO 22 OFF (LOW)
+//     Relay 1 & 2 OFF -> GPIO 22 ON (HIGH), GPIO 23 OFF (LOW)
+#define PIN_AUX_ON      23
+#define PIN_AUX_OFF     22
 #define AUX_ACTIVE_LOW  0
 #define AUX_RELAY_IDX   0
 
@@ -176,12 +179,16 @@ AcData ac = {0, 0, 0, false, 0};
 DhtData dht = {0, 0, false, 0, 0};
 
 void setAux(bool relayOn) {
+  pinMode(PIN_AUX_ON, OUTPUT);
+  pinMode(PIN_AUX_OFF, OUTPUT);
   digitalWrite(PIN_AUX_ON,  (relayOn  == !AUX_ACTIVE_LOW) ? HIGH : LOW);
   digitalWrite(PIN_AUX_OFF, (!relayOn == !AUX_ACTIVE_LOW) ? HIGH : LOW);
 }
 
 void setRelay(int i, bool on) {
+  if (i < 0 || i >= NR) return;
   relays[i].on = on;
+  pinMode(relays[i].pin, OUTPUT);
   digitalWrite(relays[i].pin, (on == !RELAY_ACTIVE_LOW) ? HIGH : LOW);
   if (i == AUX_RELAY_IDX) setAux(on);
 }
@@ -311,8 +318,14 @@ bool authOk() {
 int relaysJson(char* b, int sz) {
   int n = snprintf(b, sz, "[");
   for (int i = 0; i < NR; i++)
-    n += snprintf(b + n, sz - n, "%s{\"id\":%d,\"name\":\"%s\",\"pin\":%d,\"on\":%d}", i ? "," : "", i + 1, relays[i].name, relays[i].pin, relays[i].on);
+    n += snprintf(b + n, sz - n, "%s{\"id\":%d,\"ch\":%d,\"name\":\"%s\",\"pin\":%d,\"on\":%d}", i ? "," : "", RELAY_IDS[i], i + 1, relays[i].name, relays[i].pin, relays[i].on ? 1 : 0);
   return n + snprintf(b + n, sz - n, "]");
+}
+
+int auxJson(char* b, int sz) {
+  bool ax = relays[AUX_RELAY_IDX].on;
+  return snprintf(b, sz, "{\"relay\":%d,\"on_pin\":%d,\"off_pin\":%d,\"on\":%d,\"off\":%d}",
+                  AUX_RELAY_IDX + 1, PIN_AUX_ON, PIN_AUX_OFF, ax ? 1 : 0, ax ? 0 : 1);
 }
 
 void hData() {
@@ -334,27 +347,48 @@ void hData() {
   n += snprintf(b + n, sizeof(b) - n, ",\"dht\":{\"pin\":%d,\"ok\":%d,\"t\":%s,\"h\":%s,\"age\":%lu,\"err\":%lu}",
                 PIN_DHT, dOk, tb, hb, d.have ? (unsigned long)((millis() - d.okMs) / 1000) : 0UL, (unsigned long)d.err);
 
-  bool ax = relays[AUX_RELAY_IDX].on;
-  snprintf(b + n, sizeof(b) - n, ",\"aux\":{\"relay\":%d,\"on_pin\":%d,\"off_pin\":%d,\"on\":%d,\"off\":%d}}",
-           AUX_RELAY_IDX + 1, PIN_AUX_ON, PIN_AUX_OFF, ax, !ax);
+  n += snprintf(b + n, sizeof(b) - n, ",\"aux\":");
+  n += auxJson(b + n, sizeof(b) - n);
+  snprintf(b + n, sizeof(b) - n, "}");
   server.send(200, "application/json", b);
 }
 
 void hRelay() {
   if (!authOk()) return;
-  String ch = server.arg("ch");
-  String s = server.arg("state");
+  String ch = server.arg("ch"); ch.trim(); ch.toLowerCase();
+  String idArg = server.arg("id"); idArg.trim(); idArg.toLowerCase();
+  String pinArg = server.arg("pin"); pinArg.trim();
+  String s = server.arg("state"); s.trim(); s.toLowerCase();
+  if (!s.length() || !(s == "1" || s == "0" || s == "true" || s == "false" || s == "on" || s == "off")) {
+    server.send(400, "application/json", "{\"ok\":false,\"error\":\"state\"}");
+    return;
+  }
   bool st = (s == "1" || s == "true" || s == "on");
-  if (ch == "all") {
+  if (ch == "all" || ch == "semua" || idArg == "all" || idArg == "semua") {
     for (int i = 0; i < NR; i++) setRelay(i, st);
   } else {
-    int i = ch.toInt() - 1;
+    int i = -1;
+    if (pinArg.length()) {
+      int p = pinArg.toInt();
+      for (int k = 0; k < NR; k++) if (relays[k].pin == p) { i = k; break; }
+    } else if (idArg.length()) {
+      if (idArg == "1" || idArg == "1&2" || idArg == "1-2" || idArg == "1,2") i = 0;
+      else if (idArg == "2" || idArg == "3" || idArg == "r3" || idArg == "relay 3") i = 1;
+      else if (idArg == "4" || idArg == "r4" || idArg == "relay 4") i = 2;
+    } else {
+      if (ch == "1" || ch == "1&2" || ch == "1-2" || ch == "1,2" || ch == "r1" || ch == "gpio26") i = 0;
+      else if (ch == "2" || ch == "r2" || ch == "r3" || ch == "relay3" || ch == "relay 3" || ch == "gpio27") i = 1;
+      else if (ch == "3" || (ch == "4" && NR == 3) || ch == "r4" || ch == "relay4" || ch == "relay 4" || ch == "gpio32") i = 2;
+      else if (ch.length() && ch[0] >= '1' && ch[0] <= '9') i = ch.toInt() - 1;
+    }
     if (i < 0 || i >= NR) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"ch\"}"); return; }
     setRelay(i, st);
   }
-  char b[420];
+  char b[520];
   int n = snprintf(b, sizeof(b), "{\"ok\":true,\"relays\":");
   n += relaysJson(b + n, sizeof(b) - n);
+  n += snprintf(b + n, sizeof(b) - n, ",\"aux\":");
+  n += auxJson(b + n, sizeof(b) - n);
   snprintf(b + n, sizeof(b) - n, "}");
   server.send(200, "application/json", b);
 }
@@ -617,10 +651,16 @@ void hPortalNow() {
 }
 
 void setup() {
+  setAux(false);
   pinMode(PIN_AUX_ON, OUTPUT);
   pinMode(PIN_AUX_OFF, OUTPUT);
+  setAux(false);
   pinMode(PIN_DHT, INPUT_PULLUP);
-  for (int i = 0; i < NR; i++) { pinMode(relays[i].pin, OUTPUT); setRelay(i, false); }
+  for (int i = 0; i < NR; i++) {
+    setRelay(i, false);
+    pinMode(relays[i].pin, OUTPUT);
+    setRelay(i, false);
+  }
   Serial.begin(115200);
 
   analogReadResolution(12);

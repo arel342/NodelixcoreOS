@@ -38,10 +38,24 @@ module.exports = ({ app, broadcast, notify }) => {
         fs.writeFileSync(CAL_FILE, JSON.stringify(cal, null, 2));
     };
 
-    let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, zeroing = null, timer = null;
+    let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, zeroing = null, timer = null, relaySeq = 0;
     const hist = [], cnt = {}, act = {}, lastMsg = {};
-    // Nama relay dibaca saat dipakai, jadi perubahan RELAY_LABELS dari web langsung terlihat
-    const labels = () => E('RELAY_LABELS', '').split(',').map(s => s.trim());
+    const DEFAULT_RELAYS = [
+        { id: 1, ch: 1, name: 'Relay 1 & 2', pin: 26 },
+        { id: 3, ch: 2, name: 'Relay 3', pin: 27 },
+        { id: 4, ch: 3, name: 'Relay 4', pin: 32 }
+    ];
+    // Nama relay dibaca saat dipakai, jadi perubahan RELAY_LABELS dari web langsung terlihat.
+    // Nilai generik ("Relay 1", "Relay 1, Relay 2", dll.) dinormalisasi agar "Relay 3" tidak hilang/tertukar.
+    const labels = () => {
+        const parts = E('RELAY_LABELS', '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!parts.length) return [];
+        if (parts.every(s => /^relay\s*\d+(\s*[&,-]\s*\d+)?$/i.test(s))) {
+            return DEFAULT_RELAYS.map(r => r.name);
+        }
+        if (parts.length === 4) return [`${parts[0]} & ${parts[1]}`, parts[2], parts[3]];
+        return parts;
+    };
     const base = () => `http://${E('ESP32_IP', '')}:${N('ESP32_PORT', 80)}`;
     const target = () => base();        // alamat yang sedang dipantau (untuk memutuskan perlu log ulang)
     let lastTarget = '';
@@ -54,7 +68,7 @@ module.exports = ({ app, broadcast, notify }) => {
 
     // ---------- Hitung nilai terkoreksi ----------
     function compute() {
-        if (!raw) return null;
+        if (!raw || !Array.isArray(raw.battery) || !raw.current) return null;
         const t = {};
         raw.battery.forEach(b => {
             if (b.en) { const c = cal.taps[b.id]; t[b.id] = { raw: b.v, v: b.v * c.gain + c.offset }; }
@@ -124,17 +138,53 @@ module.exports = ({ app, broadcast, notify }) => {
         return { ok, t: ok ? d.t : null, h: ok ? d.h : null, pin: d.pin, age: d.age, err: d.err };
     }
 
+    // ---------- Keluaran pendamping Relay 1 & 2 (aktif HIGH: GPIO 23 = ON, GPIO 22 = OFF) ----------
+    // Relay 1 & 2 ON  -> GPIO 23 ON (HIGH), GPIO 22 OFF (LOW)
+    // Relay 1 & 2 OFF -> GPIO 22 ON (HIGH), GPIO 23 OFF (LOW)
+    function auxOf(j) {
+        if (!j) return null;
+        const r0 = Array.isArray(j.relays) && j.relays[0] ? !!j.relays[0].on : (j.aux ? !!j.aux.on : null);
+        if (r0 === null && !j.aux) return null;
+        const a = j.aux || {};
+        const on = r0 !== null ? r0 : !!a.on;
+        const onPin = (a.on_pin && a.on_pin !== 12) ? a.on_pin : 23;
+        const offPin = (a.off_pin && a.off_pin !== 13) ? a.off_pin : 22;
+        return {
+            relay: a.relay || 1,
+            on_pin: onPin,
+            off_pin: offPin,
+            on: on ? 1 : 0,
+            off: on ? 0 : 1
+        };
+    }
+
+    function relaysOf(j) {
+        if (!j || !Array.isArray(j.relays)) return [];
+        const lbs = labels();
+        return j.relays.map((r, i) => {
+            const def = DEFAULT_RELAYS[i] || { id: i + 1, ch: i + 1, name: r.name || `Relay ${i + 1}`, pin: r.pin };
+            return {
+                ...r,
+                id: def.id,
+                ch: def.ch,
+                pin: r.pin || def.pin,
+                on: !!r.on,
+                name: lbs[i] || def.name || r.name
+            };
+        });
+    }
+
     // ---------- Snapshot untuk dashboard ----------
     function snapshot() {
         const c = compute() || {};
         return {
             online, lastOk, fails, updating: fwstate.isBusy('esp32'),
-            esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap },
+            esp: (raw && raw.ip) ? { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap } : null,
             battery: c.battery || null,
             current: c.current || null,
             dht: dhtOf(raw),
-            aux: (raw && raw.aux) || null,   // GPIO pendamping Relay 1 & 2 (GPIO 12 = ON, GPIO 13 = OFF)
-            relays: (raw ? raw.relays : []).map((r, i) => ({ ...r, name: labels()[i] || r.name })),
+            aux: auxOf(raw),   // GPIO pendamping Relay 1 & 2 (GPIO 23 = ON, GPIO 22 = OFF, aktif HIGH)
+            relays: relaysOf(raw),
             alerts: Object.entries(act).map(([key, a]) => ({ key, ...a })),
             cal, zeroing: !!zeroing,
             limits: { iWarn: N('I_WARN_A', 5) }
@@ -168,8 +218,15 @@ module.exports = ({ app, broadcast, notify }) => {
     }
 
     async function poll() {
-        try { ingest(await call('/api/data')); }
-        catch (e) {
+        const seq = relaySeq;
+        try {
+            const j = await call('/api/data');
+            if (seq !== relaySeq && raw && Array.isArray(raw.relays)) {
+                j.relays = raw.relays;
+                j.aux = raw.aux;
+            }
+            ingest(j);
+        } catch (e) {
             fails++;
             if (fails >= N('ESP32_OFFLINE_AFTER', 3) && online) {
                 online = false;
@@ -183,19 +240,79 @@ module.exports = ({ app, broadcast, notify }) => {
     // ---------- Routes (semua sudah dilindungi login di server.js) ----------
     app.get('/api/esp32/status', (req, res) => res.json({ ...snapshot(), history: hist }));
 
+    // Petakan id relay ke kanal HTTP ESP32 (/api/relay?ch=1..3|all):
+    //   ch=1 -> relays[0] = Relay 1 & 2 (GPIO 26)
+    //   ch=2 -> relays[1] = Relay 3     (GPIO 27)
+    //   ch=3 -> relays[2] = Relay 4     (GPIO 32)
+    function resolveChannel(id) {
+        const max = (raw && Array.isArray(raw.relays) && raw.relays.length) ? raw.relays.length : 3;
+        const s = String(id == null ? '' : id).trim().toLowerCase();
+        if (!s) return null;
+        if (s === 'all' || s === 'semua') return 'all';
+        if (/^(?:r(?:elay)?\s*)?1\s*[&,-]\s*2$/.test(s)) return 1;
+        const pm = /^(?:gpio|pin)\s*(\d+)$/.exec(s);
+        if (pm) {
+            const p = parseInt(pm[1], 10);
+            if (p === 26) return 1;
+            if (p === 27) return 2;
+            if (p === 32) return 3;
+        }
+        const m = /^(?:r(?:elay)?\s*)?(\d+)$/.exec(s);
+        if (m) {
+            const n = parseInt(m[1], 10);
+            if (max === 3) {
+                if (n === 1) return 1;              // Relay 1 & 2 (GPIO 26)
+                if (n === 2 || n === 3) return 2;   // Relay 3 (GPIO 27, kanal ke-2 di ESP32)
+                if (n === 4) return 3;              // Relay 4 (GPIO 32, kanal ke-3 di ESP32)
+                if (n === 26) return 1;
+                if (n === 27) return 2;
+                if (n === 32) return 3;
+                return null;
+            }
+            if (n >= 1 && n <= max) return n;
+            return null;
+        }
+        const rels = relaysOf(raw || { relays: DEFAULT_RELAYS });
+        const byName = rels.find(r => r.name && r.name.toLowerCase() === s);
+        if (byName) return byName.ch;
+        return null;
+    }
+
+    function parseState(state) {
+        if (state === true || state === 1 || state === '1') return true;
+        if (state === false || state === 0 || state === '0') return false;
+        if (typeof state === 'string') {
+            const s = state.trim().toLowerCase();
+            if (s === 'on' || s === 'true' || s === 'high' || s === 'nyala' || s === 'hidup') return true;
+            if (s === 'off' || s === 'false' || s === 'low' || s === 'mati') return false;
+        }
+        return null;
+    }
+
     async function setRelay(id, state) {
-        const ch = id === 'all' ? 'all' : parseInt(id, 10);
-        const max = raw ? raw.relays.length : 3;
-        if (ch !== 'all' && !(ch >= 1 && ch <= max)) throw new Error(T('esp.badChannel'));
-        const j = await call(`/api/relay?ch=${ch}&state=${state ? 1 : 0}`, 'POST');
-        if (raw && j.relays) raw.relays = j.relays;
+        const ch = resolveChannel(id);
+        const st = parseState(state);
+        if (ch === null || st === null) throw new Error(T('esp.badChannel'));
+        relaySeq++;
+        const j = await call(`/api/relay?ch=${ch}&state=${st ? 1 : 0}`, 'POST');
+        relaySeq++;
+        if (!raw) raw = { relays: DEFAULT_RELAYS.map(r => ({ ...r, on: 0 })) };
+        if (j && Array.isArray(j.relays)) {
+            raw.relays = j.relays;
+        } else if (Array.isArray(raw.relays)) {
+            if (ch === 'all') raw.relays.forEach(r => { r.on = st ? 1 : 0; });
+            else if (raw.relays[ch - 1]) raw.relays[ch - 1].on = st ? 1 : 0;
+        }
+        if (j && j.aux) raw.aux = j.aux;
+        else if (Array.isArray(raw.relays) && raw.relays[0]) raw.aux = auxOf(raw);
         push();
+        return snapshot();
     }
 
     app.post('/api/esp32/relay', async (req, res) => {
         const { id, state } = req.body || {};
-        if (state !== true && state !== false && state !== 0 && state !== 1) return res.status(400).json({ success: false, message: T('esp.badChannel') });
-        setRelay(id, !!state).then(() => res.json({ success: true }))
+        if (parseState(state) === null || resolveChannel(id) === null) return res.status(400).json({ success: false, message: T('esp.badChannel') });
+        setRelay(id, state).then(data => res.json({ success: true, relays: data.relays, aux: data.aux }))
             .catch(e => res.status(e.message === T('esp.badChannel') ? 400 : 502).json({ success: false, message: e.message === T('esp.badChannel') ? e.message : T('esp.noResp', { e: e.message }) }));
     });
 
