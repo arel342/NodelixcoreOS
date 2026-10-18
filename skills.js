@@ -13,7 +13,8 @@ const skills = [
     { name: 'set_door_enabled', description: 'Aktif/nonaktifkan akses kartu RFID pada lock door.' },
     { name: 'enroll_card', description: 'Mode tambah kartu RFID baru (opsional nama pemilik).' },
     { name: 'run_command', description: 'Jalankan perintah shell di server (Termux). Hanya untuk perintah yang diminta pengguna.' },
-    { name: 'list_files', description: 'Daftar file/folder di penyimpanan (flash disk) server.' }
+    { name: 'list_files', description: 'Daftar file/folder di penyimpanan (flash disk) server.' },
+    { name: 'send_file_telegram', description: 'Kirim satu file dari flash disk ke chat Telegram admin. Gunakan jalur relatif terhadap folder penyimpanan, misalnya "Dokumen/laporan.pdf". Sebelum mengirim, gunakan list_files bila nama/jalur belum jelas. Maksimum file 49 MB.' }
 ];
 
 const systemPrompt = [
@@ -23,6 +24,7 @@ const systemPrompt = [
     'Kamu boleh memanggil skill (function) yang tersedia untuk mengontrol perangkat dan menjalankan perintah sesuai permintaan pengguna.',
     'Selalu jawab dalam bahasa Indonesia yang singkat dan jelas. Konfirmasikan tindakan yang dilakukan.',
     'Jangan menjalankan perintah berbahaya (hapus sistem, format disk, dll) tanpa konfirmasi pengguna.',
+    'Untuk mengirim file ke Telegram, cari file dengan list_files bila jalurnya belum jelas, jangan menebak nama/jalur, lalu gunakan send_file_telegram hanya untuk file yang diminta. Jika ada beberapa kemungkinan, tanyakan file mana yang dimaksud.',
     'Skill yang tersedia: ' + skills.map(s => s.name + ' - ' + s.description).join('; ')
 ].join('\n');
 

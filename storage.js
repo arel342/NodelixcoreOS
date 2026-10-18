@@ -222,8 +222,95 @@ async function send(res, rel, { inline = false, zip = false } = {}) {
   res.on('close', () => { if (c.exitCode === null) c.kill(); });
 }
 
+// Simpan stream (mis. file yang dikirim ke bot Telegram) langsung ke flash disk.
+// Nama yang sudah ada tidak ditimpa dan file parsial dibersihkan jika transfer gagal.
+async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) {
+  await ensure();
+  const name = cleanName(rawName);
+  if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+  const dir = abs(relDir || ''), dest = dir + '/' + name, tmp = `${dest}.${Date.now().toString(36)}.part`;
+  const prep = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; mkdir -p ${q(dir)}`);
+  if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
+  const [bin, args] = sh(`${G()}cat > ${q(tmp)}`);
+  const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+  let bytes = 0, err = '';
+  c.stderr.on('data', d => { err += d; });
+  const { Transform } = require('stream');
+  const limiter = new Transform({ transform(chunk, encoding, callback) {
+    bytes += chunk.length;
+    if (bytes > maxBytes) return callback(Object.assign(new Error(`File terlalu besar (maksimum ${Math.ceil(maxBytes / 1024 / 1024)} MB).`), { status: 413 }));
+    callback(null, chunk);
+  }});
+  const closedPromise = new Promise(resolve => c.once('close', code => resolve(code)));
+  try {
+    await new Promise((resolve, reject) => {
+      const { pipeline } = require('stream');
+      pipeline(stream, limiter, c.stdin, e => e ? reject(e) : resolve());
+      c.once('error', e => reject(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
+    });
+    const closed = await closedPromise;
+    if (closed !== 0) throw fail({ code: closed, err }, T('st.saveFail'));
+    const r = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; [ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] && mv ${q(tmp)} ${q(dest)}`, 120000);
+    if (r.code !== 0) throw fail(r, T('st.saveFileFail'));
+    return { filename: name, size: bytes };
+  } catch (e) {
+    try { c.kill(); } catch { }
+    await run(`${G()}rm -f ${q(tmp)}`);
+    throw e;
+  }
+}
+
+// Membaca file ke memori hanya untuk pengiriman Telegram; batas ukuran diperiksa
+// sebelum cat dimulai agar file besar tidak menghabiskan RAM perangkat.
+async function fileStream(rel) {
+  await ensure();
+  const p = abs(rel);
+  const stat = await run(`${G()}stat -c '%F|%s' ${q(p)} 2>/dev/null || exit 4`);
+  if (stat.code !== 0) throw fail(stat, T('st.notFound'));
+  const [kind, sizeText] = stat.out.trim().split('|');
+  if (kind.startsWith('directory')) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
+  const size = Number(sizeText);
+  if (!Number.isSafeInteger(size)) throw new Error(T('st.readFail'));
+  const { PassThrough } = require('stream');
+  const output = new PassThrough();
+  const [bin, args] = sh(`${G()}cat ${q(p)}`);
+  const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = '';
+  c.stderr.on('data', d => { err += d; });
+  c.stdout.pipe(output);
+  c.once('error', e => output.destroy(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.readFail'))));
+  c.once('close', code => { if (code !== 0 && !output.destroyed) output.destroy(fail({ code, err }, T('st.readFail'))); });
+  output.once('close', () => { if (c.exitCode === null) c.kill(); });
+  return { stream: output, size };
+}
+
+async function readBuffer(rel, maxBytes = 49 * 1024 * 1024) {
+  await ensure();
+  const p = abs(rel);
+  const stat = await run(`${G()}stat -c '%F|%s' ${q(p)} 2>/dev/null || exit 4`);
+  if (stat.code !== 0) throw fail(stat, T('st.notFound'));
+  const [kind, sizeText] = stat.out.trim().split('|');
+  const size = Number(sizeText);
+  if (kind.startsWith('directory')) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
+  if (!Number.isSafeInteger(size) || size > maxBytes) throw Object.assign(new Error(`File melebihi batas Telegram (${Math.floor(maxBytes / 1024 / 1024)} MB).`), { status: 413 });
+  return new Promise((resolve, reject) => {
+    const [bin, args] = sh(`${G()}cat ${q(p)}`);
+    const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    let bytes = 0, err = '';
+    c.stdout.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) { c.kill(); return reject(Object.assign(new Error('File melebihi batas Telegram.'), { status: 413 })); }
+      chunks.push(chunk);
+    });
+    c.stderr.on('data', d => { err += d; });
+    c.once('error', e => reject(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.readFail'))));
+    c.once('close', code => code === 0 ? resolve(Buffer.concat(chunks)) : reject(fail({ code, err }, T('st.readFail'))));
+  });
+}
+
 // Storage engine multer: byte upload langsung dialirkan ke flash disk (tanpa file sementara di internal).
-// Ditulis ke "<nama>.part" dulu, baru dipindah ke nama final setelah ukuran cocok -> upload yang putus tidak meninggalkan file rusak.
+// Ditulis ke "<nama>.part" dulu, baru dipindah ke nama final setelah ukuran cocok.
 function engine() {
   return {
     _handleFile(req, file, cb) {
@@ -255,4 +342,4 @@ function engine() {
   };
 }
 
-module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs };
+module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs, saveStream, readBuffer, fileStream };

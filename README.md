@@ -294,10 +294,12 @@ TELEGRAM_BOT_TOKEN=YOUR_BOT_TOKEN
 TELEGRAM_CHAT_ID=YOUR_CHAT_ID
 ```
 
-Setelah disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
+Transfer masuk saat ini dibatasi **20 MB** mengikuti Bot API Telegram standar; pengiriman file keluar dibatasi 49 MB. Jadi fitur dapat langsung dipakai tanpa memasang server tambahan.
+
+Setelah token dan Chat ID disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
 **Kirim pesan uji** memastikan token dan Chat ID benar.
 
-`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/web off`, `/web on`, dan `/ai <pertanyaan>`. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/upload`, `/cancelupload`, `/web off`, `/web on`, dan `/ai <pertanyaan>`. Kirim dokumen ke bot untuk menyimpannya ke flash disk. Jika folder tidak disertakan, bot/AI akan menanyakan tujuan; balas nama folder yang sudah ada atau `.` untuk folder utama. Folder juga bisa ditentukan pada caption, misalnya `/upload Dokumen`. Gunakan `/ai kirim file ...` untuk meminta AI mencari file di flash disk dan mengirimkannya kembali ke chat Telegram admin. File masuk dibatasi 20 MB dan file keluar 49 MB. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
 Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 

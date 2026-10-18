@@ -78,7 +78,8 @@ const toolDeclarations = [
     { name: 'set_door_enabled', description: skills.find(s => s.name === 'set_door_enabled').description, parameters: { type: 'object', properties: { enabled: { type: 'boolean' } }, required: ['enabled'] } },
     { name: 'enroll_card', description: skills.find(s => s.name === 'enroll_card').description, parameters: { type: 'object', properties: { name: { type: 'string' } } } },
     { name: 'run_command', description: skills.find(s => s.name === 'run_command').description, parameters: { type: 'object', properties: { command: { type: 'string' } }, required: ['command'] } },
-    { name: 'list_files', description: skills.find(s => s.name === 'list_files').description, parameters: { type: 'object', properties: { dir: { type: 'string' } } } }
+    { name: 'list_files', description: skills.find(s => s.name === 'list_files').description, parameters: { type: 'object', properties: { dir: { type: 'string' } } } },
+    { name: 'send_file_telegram', description: skills.find(s => s.name === 'send_file_telegram').description, parameters: { type: 'object', properties: { file_path: { type: 'string' }, caption: { type: 'string' } }, required: ['file_path'] } }
 ];
 
 module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadcast, notify } = {}) => {
@@ -96,7 +97,7 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
 
     function reload() { /* nilai dibaca saat dipakai */ }
 
-    async function executeTool(name, args) {
+    async function executeTool(name, args, chatId) {
         args = args || {};
         switch (name) {
             case 'get_status': {
@@ -143,6 +144,10 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
                 } catch (e) {
                     return { error: e.message };
                 }
+            }
+            case 'send_file_telegram': {
+                if (!telegram || typeof telegram.sendFile !== 'function') throw new Error('Pengiriman file Telegram belum tersedia');
+                return await telegram.sendFile(args.file_path, chatId, args.caption || '');
             }
             default:
                 throw new Error('skill tidak dikenal: ' + name);
@@ -208,6 +213,21 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         return text;
     }
 
+    async function askUploadDestination(filename) {
+        const fallback = `File “${filename}” sudah diterima. Mau disimpan ke folder mana di flash disk? Balas nama folder (misalnya Dokumen) atau “.” untuk folder utama.`;
+        const c = cfg();
+        if (!c.enabled || !c.apiKey) return fallback;
+        try {
+            const body = {
+                system_instruction: { parts: [{ text: 'Kamu asisten NodelixcoreOS. Tanyakan dengan singkat dan ramah dalam bahasa Indonesia folder tujuan untuk menyimpan file Telegram. Folder tujuan belum diberikan. Jangan menyimpan atau mengirim file, jangan mengarang nama folder. Sebutkan balasan “.” untuk folder utama.' }] },
+                contents: [{ role: 'user', parts: [{ text: `Nama file: ${String(filename).slice(0, 180)}. Buat satu pertanyaan klarifikasi singkat.` }] }]
+            };
+            const { json } = await callModels(c.apiKey, c.model, body, 20000);
+            const parts = ((((json || {}).candidates || [])[0] || {}).content || {}).parts || [];
+            return extractText(parts, ' ') || fallback;
+        } catch { return fallback; }
+    }
+
     async function handleMessage(userText, chatId) {
         userText = String(userText || '').trim();
         if (!userText) return 'Tulis pertanyaan atau perintah untuk AI Agent.';
@@ -232,7 +252,7 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
                     const name = fc.functionCall.name;
                     const args = fc.functionCall.args || {};
                     let result;
-                    try { result = await executeTool(name, args); }
+                    try { result = await executeTool(name, args, chatId); }
                     catch (e) { result = { error: e.message }; }
                     toolParts.push({ functionResponse: { name, response: { result } } });
                 }
@@ -292,6 +312,8 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, terminal, auth, broadca
         },
         testKey,
         reload,
+        setTelegram(value) { telegram = value || null; deps.telegram = telegram; },
+        askUploadDestination,
         handleMessage,
         handle: handleMessage,
         ask: handleMessage,
