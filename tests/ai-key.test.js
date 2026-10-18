@@ -153,6 +153,15 @@ test('ai: saran model di pesan error Google dicoba lebih dulu', async () => {
     assert.match(calls[1], /models\/gemini-9-test:generateContent/, 'saran Google dicoba sebelum cadangan');
 });
 
+test('ai: skill kirim file meneruskan jalur/caption ke bot dan hanya memakai chat aktif', async () => {
+    const { ai } = loadAi({});
+    const sent = [];
+    ai.setTelegram({ sendFile: async (...args) => { sent.push(args); return { ok: true }; } });
+    const result = await ai.executeTool('send_file_telegram', { file_path: 'Dokumen/laporan.pdf', caption: 'Laporan' }, '12345');
+    assert.deepEqual(result, { ok: true });
+    assert.deepEqual(sent, [['Dokumen/laporan.pdf', '12345', 'Laporan']]);
+});
+
 test('ai: handleMessage tanpa kunci mengarahkan ke setup awal, bukan error jaringan', async () => {
     const { ai } = loadAi({});
     const text = await ai.handleMessage('halo', 'chat-1');

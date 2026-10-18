@@ -258,6 +258,7 @@ function setWebEnabled(enabled) {
 const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
 const ai = require('./ai')({ app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, auth, broadcast, notify });
 const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning, ai });
+if (ai && typeof ai.setTelegram === 'function') ai.setTelegram(telegram);
 
 // ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
 // Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
