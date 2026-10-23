@@ -312,6 +312,8 @@ async function status() {
 
 async function list(rel) {
   await ensure();
+  // Jangan pernah menelusuri symlink yang menunjuk keluar folder penyimpanan.
+  await checked(rel || '');
   const r = await run(`${G()}cd ${q(abs(rel))} 2>/dev/null || exit 4; stat -c '%F|%s|%Y|%n' ./.[!.]* ./..?* ./* 2>/dev/null; exit 0`);
   if (r.code !== 0) throw fail(r, T('st.listFail'));
   return r.out.split('\n').map(l => /^([^|]*)\|(\d+)\|(\d+)\|\.\/(.+)$/.exec(l)).filter(Boolean).map(m => ({
