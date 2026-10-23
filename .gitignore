@@ -58,3 +58,10 @@ uploads/
 *.backup
 *.old
 *.orig
+
+# Runtime state (riwayat AI, jadwal, audit, riwayat sensor)
+data/ai-history.json
+data/schedules.json
+data/sensor-history.json
+data/audit.log
+data/audit.log.*

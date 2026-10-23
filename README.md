@@ -30,6 +30,14 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * WebSocket untuk komunikasi real-time
 * Sistem notifikasi
 * Integrasi Telegram
+* AI Agent (Gemini) dengan 27 skill terstruktur: status, relay, pintu/RFID, file, sistem,
+  jadwal/otomasi, riwayat sensor, dan diagnosis
+* Konfirmasi tindakan sensitif yang ditegakkan backend (tombol web / Telegram), sekali pakai
+  dan terikat pada sesi/chat
+* Jadwal & otomasi (zona `Asia/Jakarta`) yang bertahan setelah restart
+* Riwayat sensor + diagnosis yang memisahkan fakta terukur dari kemungkinan penyebab
+* Fitur opsional analisis dokumen & transkripsi suara (nonaktif secara default)
+* Audit log tindakan AI/skill dengan penyaringan rahasia
 * Konfigurasi melalui `.env`
 * Dukungan multi-bahasa
 * Penyimpanan konfigurasi kalibrasi
@@ -58,8 +66,24 @@ NodelixcoreOS/
 ├── server.js
 ├── settings.js          <- pengaturan lewat web (ESP32, ESP8266, Telegram, AI, akun, monitoring)
 ├── setup.js             <- setup awal (halaman /setup.html), termasuk langkah kunci API Gemini
-├── ai.js                <- AI Agent Gemini (dipakai perintah /ai di Telegram)
-├── skills.js            <- daftar "skill"/alat yang boleh dipanggil AI Agent
+├── ai.js                <- satu implementasi AI Agent (web + Telegram)
+├── agent.js             <- alias: module.exports = require('./ai')
+├── ai-agent.js          <- alias
+├── ai_agent.js          <- alias
+├── gemini.js            <- alias
+├── skills.js            <- kompatibilitas lama: re-export registry skill
+├── skills-registry.js   <- SATU sumber skill: schema, validasi, kebijakan, handler
+├── executor.js          <- satu pengelola eksekusi terminal web + AI (kill grup proses)
+├── terminal.js          <- HTTP terminal web di atas executor
+├── confirm.js           <- konfirmasi tindakan sensitif (ID, TTL, identitas, sekali pakai)
+├── audit.js             <- audit log JSONL + penyaringan rahasia
+├── ai-history.js        <- riwayat AI terisolasi & dibatasi
+├── relay-map.js         <- pemetaan relay/alias yang dipakai semua modul
+├── sensor-history.js    <- riwayat sensor ringan untuk chart & skill
+├── diagnostics.js       <- fakta vs kemungkinan penyebab
+├── scheduler.js         <- jadwal & otomasi persisten (Asia/Jakarta)
+├── optional-features.js <- dokumen/voice opsional (default mati)
+├── locks.js             <- serialisasi perubahan perangkat
 ├── esp32.js
 ├── door.js
 ├── firmware.js
@@ -93,6 +117,8 @@ NodelixcoreOS/
     ├── terminal.js
     ├── upload.js
     ├── ui.js
+    ├── ai.html          <- halaman chat + tombol konfirmasi AI
+    ├── ai.js
     └── i18n.js
 ```
 
@@ -100,7 +126,7 @@ NodelixcoreOS/
 
 ## Persyaratan
 
-* Node.js
+* Node.js **18.17 atau lebih baru** (diuji di Node 18/20/22; Termux: `pkg install nodejs`)
 * npm
 * Git
 
@@ -299,23 +325,23 @@ Transfer masuk saat ini dibatasi **20 MB** mengikuti Bot API Telegram standar; p
 Setelah token dan Chat ID disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
 **Kirim pesan uji** memastikan token dan Chat ID benar.
 
-`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/upload`, `/cancelupload`, `/web off`, `/web on`, dan `/ai <pertanyaan>`. Kirim dokumen ke bot untuk menyimpannya ke flash disk. Jika folder tidak disertakan, bot/AI akan menanyakan tujuan; balas nama folder yang sudah ada atau `.` untuk folder utama. Folder juga bisa ditentukan pada caption, misalnya `/upload Dokumen`. Gunakan `/ai kirim file ...` untuk meminta AI mencari file di flash disk dan mengirimkannya kembali ke chat Telegram admin. File masuk dibatasi 20 MB dan file keluar 49 MB. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/upload`, `/cancelupload`, `/web off`, `/web on`, `/ai <pertanyaan>`, `/jobs`, `/cancel [id|all]`, `/reset`, `/transcribe` (balas pesan suara), dan `/analyze <path> [pertanyaan]`. Kirim dokumen ke bot untuk menyimpannya ke flash disk. Jika folder tidak disertakan, bot/AI akan menanyakan tujuan; balas nama folder yang sudah ada atau `.` untuk folder utama. Folder juga bisa ditentukan pada caption, misalnya `/upload Dokumen`. Gunakan `/ai kirim file ...` untuk meminta AI mencari file di flash disk dan mengirimkannya kembali ke chat Telegram admin. File masuk dibatasi 20 MB dan file keluar 49 MB. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
 Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 
 ## AI Agent (Gemini)
 
-AI Agent menambahkan asisten berbasis Gemini yang dipakai lewat perintah `/ai <pertanyaan>`
-di Telegram. Ia punya "skill" (`skills.js`) untuk membaca status ESP32/pintu, menyalakan
-relay, membuka pintu, dan menjalankan perintah Termux, jadi kuncinya layak dianggap sensitif.
+AI Agent bisa dipakai dari dua tempat dan memakai implementasi yang sama:
 
-Kunci API **gratis** dari Google AI Studio: <https://aistudio.google.com/apikey>. Ada dua cara
-mengisinya, keduanya menulis ke `.env` tanpa perlu restart:
+* **Telegram** — `/ai <pertanyaan>` atau kirim pesan biasa ke bot admin.
+* **Web** — buka `/ai.html` (tombol **AI Agent** di sidebar dashboard).
 
-| Cara | Yang diisi |
-| --- | --- |
-| Setup awal `/setup.html` (langkah 6) | `AI_AGENT_ENABLED`, `GEMINI_API_KEY`, `GEMINI_MODEL` |
-| Tab **Pengaturan** > kartu **AI Agent (Gemini)** | nilai yang sama, plus tombol **Uji kunci ke Gemini** |
+`ai.js` adalah satu-satunya implementasi. `agent.js`, `ai-agent.js`, `ai_agent.js`, dan
+`gemini.js` hanya berisi `module.exports = require('./ai')`, sehingga perilaku, batas, dan
+kebijakan keamanannya selalu sama.
+
+Kunci API **gratis** dari Google AI Studio: <https://aistudio.google.com/apikey>. Isi lewat
+setup awal atau tab **Pengaturan** > kartu **AI Agent (Gemini)**; tidak perlu restart.
 
 ```env
 AI_AGENT_ENABLED=true
@@ -323,11 +349,163 @@ GEMINI_API_KEY=AQ....
 GEMINI_MODEL=gemini-3.5-flash-lite
 ```
 
-Kalau `GEMINI_API_KEY` masih kosong, `/ai` balasnya adalah cara mengisinya (bukan error
-jaringan), dan log server menampilkan `[AI] GEMINI_API_KEY belum diisi...` saat server mulai.
-`AI_AGENT_ENABLED=false` menonaktifkan AI Agent tanpa menghapus kuncinya. Uji cepat dari
-browser: `GET /api/ai/status` (status + model) dan `POST /api/ai/test` (mengirim prompt
-pendek ke Gemini).
+### Model, fallback, dan biaya
+
+Model yang **Anda tulis tidak diganti otomatis**. Server hanya membuang awalan `models/`.
+Bila model itu sudah pensiun atau tidak tersedia untuk kunci Anda, permintaan gagal dengan
+pesan yang menyebut model tersebut, lalu daftar cadangan dipakai (bila diaktifkan). Ini
+disengaja: berpindah model/tier biaya tidak boleh terjadi diam-diam.
+
+```env
+GEMINI_FALLBACK_ENABLED=true
+GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite
+GEMINI_FALLBACK_ON_QUOTA=false          # true = cadangan juga dipakai saat kuota habis
+GEMINI_HONOR_MODEL_SUGGESTION=false     # true = coba model yang disarankan pesan error Google
+GEMINI_RETRY_MAX=2
+GEMINI_RETRY_DELAY_MS=1200              # backoff x2, menghormati Retry-After <= 20 dtk
+GEMINI_TIMEOUT_S=60
+AI_MAX_ROUNDS=8
+AI_MAX_TOOL_CALLS=12
+AI_JOB_TIMEOUT_S=120
+```
+
+Kesalahan dibedakan menjadi: kunci ditolak (`auth`), model tidak tersedia (`model`), kuota
+(`quota`), gangguan server, timeout, jaringan, output tidak valid/kosong/diblokir, dan
+dibatalkan. Tindakan perangkat yang sudah berhasil **tidak diulang** saat percobaan model
+berikutnya gagal, dan panggilan tool yang sama dalam satu giliran hanya dijalankan sekali.
+
+### Skill (satu registry)
+
+Semua skill didefinisikan di `skills-registry.js` (nama, deskripsi, schema, validator,
+kebijakan, handler, ketersediaan). Deklarasi function-calling Gemini dan daftar kemampuan
+di `/api/ai/status` dibangun dari sumber yang sama. Argumen divalidasi **sebelum** ada efek
+samping; tipe boolean wajib `true`/`false` (string `"false"` ditolak), dan argumen tambahan
+seperti `approved: true` ditolak.
+
+| Kelompok | Skill | Izin |
+| --- | --- | --- |
+| Status | `get_status`, `get_system_status`, `diagnose_device`, `get_sensor_history` | otomatis |
+| Relay | `set_relay` (1 & 2 → GPIO 26, 3 → GPIO 27, 4 → GPIO 32, `all`) | otomatis (target divalidasi) |
+| Pintu/RFID | `open_door`, `set_door_enabled`, `enroll_card` | **konfirmasi** |
+| Pintu/RFID | `close_door` | otomatis |
+| Shell | `run_command` | otomatis hanya untuk allowlist status (`uptime`, `df`, `free`, `ps`, …); selebihnya **konfirmasi** |
+| File | `list_files`, `search_files`, `read_text_file`, `create_folder`, `copy_file`, `compress_file` | otomatis |
+| File | `rename_file`, `move_file` | **konfirmasi** |
+| Telegram | `send_file_telegram` (selalu ke chat admin, bukan IP) | otomatis |
+| Jadwal | `schedule_action`, `create_automation` | **konfirmasi** |
+| Jadwal | `list_schedules`, `cancel_schedule`, `list_automations`, `disable_automation` | otomatis |
+| Opsional | `analyze_document`, `transcribe_voice` | **konfirmasi** + fitur harus aktif |
+
+`get_status` hanya mengembalikan ringkasan (jumlah kartu, bukan seluruh UID/log akses).
+`run_command` menyaring variabel environment rahasia, menolak `.env`/private key, dan
+menerapkan batas waktu `AI_COMMAND_TIMEOUT_S` (default 30). Penyaringan ini **bukan sandbox**:
+perintah yang disetujui tetap berjalan dengan hak akses user Node dan bisa membaca apa pun
+yang diizinkan OS.
+
+### Konfirmasi tindakan sensitif
+
+1. Model meminta skill sensitif → backend membuat record konfirmasi (ID unik, ringkasan
+   tindakan + target, masa berlaku `CONFIRM_TTL_S`, default 300 detik).
+2. Record terikat pada **aktor + kanal + sesi web atau chat Telegram** peminta. Tidak ada
+   eksekusi sebelum pengguna menekan tombol.
+3. Persetujuan hanya dari tombol di `/ai.html` (sesi login) atau inline keyboard Telegram
+   dari chat admin. Model tidak bisa menyetujui; argumen model tidak pernah dibaca sebagai
+   persetujuan.
+4. Saat disetujui, status langsung `executing` (klik ganda tidak menjalankan dua kali),
+   izin & ketersediaan diperiksa ulang, lalu hasilnya dicatat. Konfirmasi sekali pakai;
+   kedaluwarsa, identitas/kanal lain, atau pemakaian ulang ditolak dengan pesan jelas.
+
+Endpoint web: `GET /api/ai/confirmations`, `POST /api/ai/confirmations/:id/approve`,
+`POST /api/ai/confirmations/:id/cancel`. Halaman `/ai.html` hanya menampilkan tombol yang
+dibuat server; keputusan tetap di backend.
+
+### Riwayat percakapan
+
+Riwayat memuat pesan, panggilan tool, hasil tool (diringkas), dan jawaban akhir, sehingga
+hasil sensor/file bisa dipakai pada pertanyaan lanjutan. Identitas percakapan adalah sesi
+login web (`web:<sid>`) atau chat Telegram (`telegram:<chatId>`) — **alamat IP bukan
+identitas**. Batas: `AI_HISTORY_MAX_TOKENS` (6000), `AI_HISTORY_MAX_TURNS` (12),
+`AI_HISTORY_MAX_SESSIONS` (20), `AI_HISTORY_MAX_KB` (512). Rahasia disaring sebelum disimpan.
+Bila `AI_HISTORY_PERSIST=true` (default), data ditulis atomik ke `data/ai-history.json`.
+Hapus lewat tombol **Hapus riwayat**, `POST /api/ai/history/clear`, atau `DELETE /api/ai/history`.
+
+### Batas pekerjaan
+
+Satu permintaan dibatasi oleh jumlah putaran model (`AI_MAX_ROUNDS`), total panggilan tool
+(`AI_MAX_TOOL_CALLS`), dan durasi pekerjaan (`AI_JOB_TIMEOUT_S`). Hasil tool dipotong agar
+tidak membanjiri model. Pesan untuk input kosong, fitur nonaktif, kuota, timeout, output
+kosong/diblokir, dan batas langkah dibuat eksplisit — bukan error jaringan yang membingungkan.
+
+### Fitur opsional: dokumen & suara
+
+Keduanya **nonaktif secara default**, hanya berjalan bila diminta eksplisit, dan tidak
+pernah mengirim dokumen/suara otomatis.
+
+```env
+DOCUMENT_AI_ENABLED=false
+DOCUMENT_AI_PROVIDER=gemini
+DOCUMENT_AI_MODEL=gemini-3.5-flash-lite
+DOCUMENT_AI_MAX_MB=5
+VOICE_AI_ENABLED=false
+VOICE_AI_PROVIDER=gemini
+VOICE_AI_MODEL=gemini-3.5-flash-lite
+VOICE_AI_LANGUAGE=id
+VOICE_AI_MAX_MB=8
+OPTIONAL_AI_TIMEOUT_S=60
+```
+
+Yang diizinkan: dokumen `txt, log, md, csv, json, xml, html, pdf, js, ino, py, yml`; audio
+`ogg, oga, opus, mp3, wav, m4a, webm, flac, aac, amr`. Ukuran dibatasi sebelum file dibaca
+penuh, isi file diperlakukan sebagai data tidak tepercaya, dan tidak ada file sementara di
+disk. Bila fitur/provider/dependency belum siap, statusnya dilaporkan apa adanya
+(`FEATURE_DISABLED` / `UNSUPPORTED_TYPE` / `413`), bukan diklaim berhasil.
+
+## Jadwal & Otomasi
+
+AI dapat membuat jadwal (`schedule_action`) dan otomasi kondisi sensor
+(`create_automation`), lalu menampilkan/membatalkannya lewat `list_schedules`,
+`cancel_schedule`, `list_automations`, dan `disable_automation`.
+
+* Zona waktu interaksi: `SCHEDULE_TZ` (default `Asia/Jakarta`). Waktu lengkap (tanggal,
+  jam, zona) ditampilkan pada konfirmasi **sebelum** jadwal disimpan.
+* Contoh: “matikan relay 3 pukul 22.00 WIB”, “setiap hari 18.00 nyalakan relay 4”,
+  “beri tahu bila suhu di atas 35 °C selama 1 menit”.
+* Data disimpan atomik di `data/schedules.json` (tmp + rename + antrean tulis) sehingga
+  bertahan setelah restart.
+* Jadwal yang terlewat saat server mati **tidak dijalankan diam-diam**:
+  `SCHEDULE_MISSED_POLICY=skip` (default) atau `run-once`, dengan batas
+  `SCHEDULE_MAX_LATE_S=300`.
+* Otomasi hanya memakai data sensor segar; data offline atau lebih tua dari
+  `SENSOR_STALE_S` (default 120 detik) tidak memicu tindakan. Ada durasi kondisi,
+  hysteresis, dan `cooldown_sec` agar notifikasi tidak berulang.
+* Tindakan otomatis dibatasi pada operasi non-sensitif (`set_relay`, `close_door`,
+  `compress_file`, `send_file_telegram`). Pintu, akses RFID, dan shell **tidak bisa**
+  dijadwalkan/diotomasikan; semuanya tetap perlu konfirmasi manusia setiap kali. Ini juga
+  diperiksa ulang di scheduler sebagai pertahanan berlapis.
+
+```env
+SCHEDULE_TZ=Asia/Jakarta
+SCHEDULE_MISSED_POLICY=skip
+SCHEDULE_MAX_LATE_S=300
+AUTOMATION_EVAL_MS=2000
+SENSOR_STALE_S=120
+SENSOR_HISTORY_HOURS=24
+SENSOR_HISTORY_MAX_POINTS=6000
+SENSOR_HISTORY_MIN_INTERVAL_S=15
+SENSOR_HISTORY_PERSIST=false
+```
+
+## Berkas runtime & audit
+
+| Berkas | Isi | Default |
+| --- | --- | --- |
+| `data/ai-history.json` | riwayat AI terbatas (tanpa rahasia) | `AI_HISTORY_PERSIST=true` |
+| `data/schedules.json` | jadwal & otomasi | selalu |
+| `data/audit.log` | audit JSONL: waktu, aktor, kanal, skill, target, hasil, op ID | `AUDIT_LOG_ENABLED=true`, rotasi `AUDIT_LOG_MAX_MB=2` |
+| `data/sensor-history.json` | riwayat sensor | `SENSOR_HISTORY_PERSIST=false` |
+
+Berkas runtime ini tidak boleh di-commit (lihat `.gitignore`). Audit mencatat tindakan
+otomatis, terjadwal, dan setelah konfirmasi; token/API key/password disaring sebelum ditulis.
 
 ## Monitoring
 
@@ -360,7 +538,9 @@ File `lang.js` menangani teks dan pesan yang digunakan aplikasi.
 
 ## Terminal Web
 
-Terminal tersedia di tab **Pengaturan** untuk menjalankan perintah pada perangkat server. Fitur ini aktif secara default dan dapat dimatikan melalui saklar terminal atau dengan mengubah `TERMINAL_ENABLED` di `.env`. Batas waktu, ukuran output, jumlah proses bersamaan, shell, dan folder awal dapat diatur melalui variabel `TERMINAL_*` di `.env` atau dilihat di `.env.example`.
+Terminal tersedia di tab **Terminal** untuk menjalankan perintah pada perangkat server. Fitur ini aktif secara default dan dapat dimatikan melalui saklar terminal atau dengan mengubah `TERMINAL_ENABLED` di `.env`. **Terminal web dan skill `run_command` milik AI memakai satu executor yang sama** (`executor.js`): `TERMINAL_ENABLED` diperiksa setiap kali perintah dijalankan, shell/folder/batas waktu/ukuran output/jumlah proses mengikuti pengaturan yang sama, dan pembatalan atau timeout mematikan seluruh grup proses (termasuk `sleep`, `ping`, dan anak dari `sh -c`). Saat terminal dimatikan, pekerjaan yang masih berjalan dihentikan dengan SIGTERM lalu SIGKILL. Operasi file manager **tidak** bergantung pada terminal.
+
+Batas waktu, ukuran output, jumlah proses bersamaan, shell, dan folder awal dapat diatur melalui variabel `TERMINAL_*` di `.env` atau dilihat di `.env.example`.
 
 Terminal memberikan akses menjalankan perintah pada perangkat server. Gunakan hanya pada jaringan tepercaya, lindungi akun administrator, dan matikan fitur ini jika tidak diperlukan.
 
@@ -463,6 +643,24 @@ Untuk deployment ke internet, pertimbangkan:
 * Pembatasan akses storage
 * Rotasi API key
 * Secret management
+* Jangan menganggap prompt AI sebagai pengaman: izin sensitif ditegakkan backend
+  (konfirmasi + validasi schema + audit), bukan oleh kata-kata di prompt.
+* Aktifkan `TERMINAL_ENABLED=false` bila terminal/AI shell tidak diperlukan.
+* Periksa `data/audit.log` bila mencurigai tindakan yang tidak diinginkan.
+* Tindakan otomatis (jadwal/otomasi) sengaja dibatasi pada operasi non-sensitif.
+
+### Catatan migrasi dari versi sebelumnya
+
+* Model `GEMINI_MODEL` **tidak lagi ditulis ulang otomatis**. Bila dulu memakai nama model
+  lama (mis. `gemini-1.5-*`), perbarui sendiri di Pengaturan; server akan menampilkan error
+  yang jelas dan memakai `GEMINI_FALLBACK_MODELS` bila model itu tidak tersedia.
+* `agent.js`, `ai-agent.js`, `ai_agent.js`, dan `gemini.js` kini hanya alias ke `ai.js`.
+  Jangan menambahkan logika baru ke file alias.
+* Riwayat AI dan jadwal disimpan di `data/` (lihat tabel di atas); amankan folder itu dan
+  jangan memasukkannya ke Git.
+* Tindakan sensitif (pintu, akses RFID, shell di luar allowlist, rename/move, jadwal)
+  sekarang memerlukan konfirmasi eksplisit; alur otomasi/skrip lama yang memanggil skill
+  tersebut tanpa konfirmasi akan ditolak.
 
 
 
@@ -484,6 +682,11 @@ Project ini menggunakan lisensi yang ditentukan pada `package.json`.
 Project masih dalam pengembangan.
 
 Gunakan dan uji pada jaringan lokal sebelum melakukan deployment ke internet.
+
+Yang **belum** diverifikasi di perangkat fisik (lihat juga laporan perubahan):
+pembukaan pintu, enrollment kartu, relay sungguhan, kestabilan flash disk saat dicabut,
+pengiriman file besar ke Telegram, serta perilaku OTA pada jaringan nyata. Semua alur di
+atas sudah diuji dengan mock/unit test, bukan dengan perangkat asli.
 
 
 

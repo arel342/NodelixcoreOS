@@ -25,10 +25,8 @@ function saveEnv(key, value) {
     fs.writeFileSync(ENV_FILE, txt);
     process.env[key] = value;   // langsung dipakai proses yang berjalan
 }
-if (/^gemini-(1\.\d|2\.\d|pro(-vision)?)(-[a-z0-9.-]+)?$/i.test(process.env.GEMINI_MODEL || '')) {
-    if (fs.existsSync(ENV_FILE)) saveEnv('GEMINI_MODEL', 'gemini-3.5-flash-lite');
-    else process.env.GEMINI_MODEL = 'gemini-3.5-flash-lite';
-}
+// Catatan: konfigurasi GEMINI_MODEL milik pengguna TIDAK ditulis ulang otomatis.
+// Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
 
 const app = express();
 const server = http.createServer(app);
@@ -218,17 +216,41 @@ function verifyDashboardPassword(req, res) {
 }
 
 // ================= ESP32 MONITOR =================
-const esp32 = require('./esp32')({ app, broadcast, notify });
+const sensorHistory = require('./sensor-history')({ env });
+const esp32 = require('./esp32')({ app, broadcast, notify, sensorHistory });
 // ================= PINTU RFID (ESP8266) =================
 const door = require('./door')({ app, broadcast, notify, verifyDashboardPassword });
 // ================= UPDATE FIRMWARE ESP (file .bin -> ESP8266 / ESP32) =================
 const firmware = require('./firmware')({ app, broadcast, notify, esp32, door });
 // ================= MONITOR SISTEM (CPU/RAM/flash disk) =================
 const system = require('./system')({ app, broadcast });
-// ================= TERMINAL COMMAND (Pengaturan > Terminal) =================
-const terminalMod = require('./terminal')({ app, saveEnv });
 
+// ================= EKSEKUSI & KEAMANAN BERSAMA =================
+// Satu executor untuk terminal web + AI, satu set lock untuk perangkat, satu
+// penyimpanan konfirmasi, satu catatan audit, dan satu riwayat sensor.
 let webRunning = false, servicesStarted = false;
+const executor = require('./executor')({ env });
+const locks = require('./locks').createLocks();
+const confirm = require('./confirm')({ env });
+const audit = require('./audit')({ env });
+const optional = require('./optional-features')({ env, storage });
+
+// Objek dependensi DIPAKAI BERSAMA oleh registry, AI, penjadwal, dan Telegram.
+const skillDeps = {
+    esp32, door, storage, system, telegram: null, executor, locks, confirm, audit,
+    sensorHistory, scheduler: null, optional,
+    diagnostics: null,
+    isWebEnabled: () => webRunning
+};
+const diagnostics = require('./diagnostics')({ deps: skillDeps, env });
+skillDeps.diagnostics = diagnostics;
+
+// ================= REGISTRY SKILL (satu sumber untuk AI) =================
+const registry = require('./skills-registry')({ deps: skillDeps, env });
+
+// ================= TERMINAL COMMAND (Pengaturan > Terminal) =================
+const terminalMod = require('./terminal')({ app, saveEnv, executor });
+
 function setWebEnabled(enabled) {
     if (enabled) return new Promise((resolve, reject) => {
         if (server.listening) { webRunning = true; return resolve(true); }
@@ -254,11 +276,30 @@ function setWebEnabled(enabled) {
     });
 }
 
-// Buat objek auth sebelum membuat AI agent karena auth diteruskan sebagai dependensi.
+// ================= AI AGENT =================
+// ai.js adalah implementasi utama. Alias agent.js/ai-agent.js/ai_agent.js/gemini.js
+// hanya me-re-export modul ini.
 const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
-const ai = require('./ai')({ app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, auth, broadcast, notify });
-const telegram = require('./telegram')({ esp32, door, setWebEnabled, isWebEnabled: () => webRunning, ai });
+const ai = require('./ai')({
+    app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, executor, auth,
+    broadcast, notify, registry, confirm, audit, sensorHistory, optional,
+    storage, system, locks, diagnostics, deps: skillDeps,
+    isWebEnabled: () => webRunning
+});
+
+// ================= TELEGRAM =================
+const telegram = require('./telegram')({
+    esp32, door, setWebEnabled, isWebEnabled: () => webRunning, ai,
+    locks, optional, storage
+});
+skillDeps.telegram = telegram;
 if (ai && typeof ai.setTelegram === 'function') ai.setTelegram(telegram);
+
+// ================= JADWAL & OTOMASI =================
+const scheduler = require('./scheduler')({
+    env, registry, sensorHistory, notify, log: console.log
+});
+skillDeps.scheduler = scheduler;
 
 // ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
 // Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
@@ -346,7 +387,23 @@ function startDevices() {
     system.start();
     telegram.start().then(() => telegram.welcome());
     try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[AI]', e.message); }
+    // Jadwal & otomasi dimulai setelah layanan perangkat hidup; kebijakan jadwal
+    // terlewat diterapkan di scheduler.bootstrap() (default: dilewati).
+    scheduler.start().catch(e => console.error('[Jadwal]', e.message));
 }
+
+// Simpan state dan hentikan proses anak dengan rapi saat server berhenti.
+let shuttingDown = false;
+function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try { scheduler.stop(); } catch { }
+    try { executor.killAll('shutdown'); } catch { }
+    try { sensorHistory.save(); } catch { }
+    try { ai && ai.history && ai.history.save(); } catch { }
+}
+process.on('exit', shutdown);
+for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { shutdown(); process.exit(130); });
 
 function printBanner() {
     const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)

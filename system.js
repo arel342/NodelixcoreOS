@@ -77,8 +77,10 @@ module.exports = ({ app, broadcast }) => {
 
     const hist = [];   // [{t, cpu, ram}]
     let last = { t: 0, cpu: null, ram: null };
+    let lastFull = null;   // snapshot lengkap terakhir untuk /api/system & skill sistem
 
     async function sample() {
+        const unavailable = [];
         const p = await readProc();
         if (p) {
             const cpu = cpuPct(p.stat), ram = ramInfo(p.mem);
@@ -87,19 +89,24 @@ module.exports = ({ app, broadcast }) => {
                 hist.push({ t: last.t, cpu: last.cpu, ram: last.ram ? +last.ram.pct.toFixed(1) : null });
                 if (hist.length > HMAX) hist.shift();
             }
+        } else {
+            unavailable.push('cpu_ram');
         }
+        if (last.cpu == null) { if (!unavailable.includes('cpu')) unavailable.push('cpu'); }
+        if (!last.ram) { if (!unavailable.includes('ram')) unavailable.push('ram'); }
         const fl = await flashInfo();
         let cores = 0, model = '';
         try { const c = os.cpus(); cores = c.length; model = (c[0] && c[0].model) || ''; } catch { }
-        broadcast({
-            type: 'SYSTEM',
-            data: {
-                t: last.t, cpu: last.cpu == null ? null : +last.cpu.toFixed(1),
-                ram: last.ram && { total: last.ram.total, used: last.ram.used, pct: +last.ram.pct.toFixed(1) },
-                flash: fl, cores, model, load: (() => { try { return +os.loadavg()[0].toFixed(2); } catch { return null; } })(),
-                uptime: Math.floor(os.uptime())
-            }
-        });
+        if (!cores) unavailable.push('cores');
+        const data = {
+            t: last.t || Date.now(), cpu: last.cpu == null ? null : +last.cpu.toFixed(1),
+            ram: last.ram && { total: last.ram.total, used: last.ram.used, pct: +last.ram.pct.toFixed(1) },
+            flash: fl, cores, model, load: (() => { try { return +os.loadavg()[0].toFixed(2); } catch { return null; } })(),
+            uptime: Math.floor(os.uptime()), unavailable
+        };
+        lastFull = data;
+        broadcast({ type: 'SYSTEM', data });
+        return data;
     }
 
     let timer = null;
@@ -108,8 +115,19 @@ module.exports = ({ app, broadcast }) => {
     // Sudah dilindungi login di server.js
     app.get('/api/system', (req, res) => res.json({ now: last, history: hist }));
 
+    // Accessor untuk skill AI/diagnosis: selalu mengembalikan nilai yang benar-benar
+    // dibaca. Bila sampling belum pernah berhasil, nilai null + daftar unavailable.
+    async function getStatus() {
+        if (lastFull && Date.now() - (lastFull.t || 0) < Math.max(3000, POLL_MS * 2)) return lastFull;
+        try { return await sample(); }
+        catch (e) { return lastFull || { t: Date.now(), cpu: null, ram: null, flash: { ready: false, message: e.message }, cores: 0, load: null, uptime: null, unavailable: ['cpu', 'ram', 'flash'] }; }
+    }
+
     return {
         start() { loop(); },
-        stop() { clearTimeout(timer); }
+        stop() { clearTimeout(timer); },
+        getStatus,
+        history: () => hist.slice(),
+        snapshot: () => lastFull
     };
 };

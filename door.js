@@ -29,6 +29,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     };
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, boot = null, cursor = 0;
+    let lastError = '', lastErrorAt = 0;   // error terakhir untuk diagnose_device
     let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
     const lastMsg = {};
     const base = () => `http://${E('DOOR_IP', '')}:${N('DOOR_PORT', 80)}`;
@@ -55,7 +56,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     const snapshot = () => {
         const left = enrollUntil ? Math.max(0, Math.ceil((enrollUntil - Date.now()) / 1000)) : 0;
         return {
-            configured: configured(), online, lastOk, fails, updating: fwstate.isBusy('esp8266'),
+            configured: configured(), online, lastOk, fails, lastError, lastErrorAt, updating: fwstate.isBusy('esp8266'),
             esp: raw && { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw },
             open: !!(raw && raw.open), left: raw ? raw.left : 0,
             enabled: db.enabled, openSec: db.openSec, synced: !!(raw && raw.ver === db.ver),
@@ -139,7 +140,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     }
 
     function ingest(j) {
-        raw = j; fails = 0; lastOk = Date.now();
+        raw = j; fails = 0; lastOk = Date.now(); lastError = ''; lastErrorAt = 0;
         if (!online) {
             online = true;
             // Saat OTA, ESP memang berhenti menjawab sejenak -> jangan kirim pesan "kembali online"
@@ -229,7 +230,10 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     });
 
     app.post('/api/door/lock', async (req, res) => {
-        const state = await setEnabled(!!(req.body || {}).enabled);
+        const value = (req.body || {}).enabled;
+        // Boolean harus benar-benar boolean; string "false" tidak boleh menjadi true.
+        if (typeof value !== 'boolean') return fail(res, 400, 'Nilai "enabled" harus boolean true/false.');
+        const state = await setEnabled(value);
         res.json({ success: true, ...state, message: state.enabled ? T('door.lockOnMsg') : T('door.lockOffMsg') });
     });
 
