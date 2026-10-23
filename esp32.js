@@ -25,7 +25,7 @@ const defaults = () => ({
     i: { floor: 0, gain: 1 }   // floor = noise arus saat tanpa beban (A), gain = faktor skala arus
 });
 
-module.exports = ({ app, broadcast, notify }) => {
+module.exports = ({ app, broadcast, notify, sensorHistory }) => {
     // ---------- Kalibrasi (disimpan di data/calibration.json) ----------
     const CAL_FILE = path.join(__dirname, 'data', 'calibration.json');
     let cal = defaults();
@@ -39,6 +39,7 @@ module.exports = ({ app, broadcast, notify }) => {
     };
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, zeroing = null, timer = null, relaySeq = 0;
+    let lastError = '', lastErrorAt = 0;   // error terakhir (dipakai diagnose_device)
     const hist = [], cnt = {}, act = {}, lastMsg = {};
     const DEFAULT_RELAYS = [
         { id: 1, ch: 1, name: 'Relay 1 & 2', pin: 26 },
@@ -178,7 +179,7 @@ module.exports = ({ app, broadcast, notify }) => {
     function snapshot() {
         const c = compute() || {};
         return {
-            online, lastOk, fails, updating: fwstate.isBusy('esp32'),
+            online, lastOk, fails, lastError, lastErrorAt, updating: fwstate.isBusy('esp32'),
             esp: (raw && raw.ip) ? { ip: raw.ip, rssi: raw.rssi, uptime: raw.uptime, fw: raw.fw, heap: raw.heap } : null,
             battery: c.battery || null,
             current: c.current || null,
@@ -193,7 +194,7 @@ module.exports = ({ app, broadcast, notify }) => {
     const push = () => broadcast({ type: 'SENSOR', data: snapshot() });
 
     function ingest(j) {
-        raw = j; fails = 0; lastOk = Date.now();
+        raw = j; fails = 0; lastOk = Date.now(); lastError = ''; lastErrorAt = 0;
         if (!online) {
             online = true;
             // Saat OTA, ESP memang berhenti menjawab sejenak -> jangan kirim pesan "kembali online"
@@ -210,8 +211,22 @@ module.exports = ({ app, broadcast, notify }) => {
         const c = compute();
         if (c) {
             const d = dhtOf(j);
-            hist.push({ t: Date.now(), v: c.battery ? c.battery.pack : null, i: c.current.a, tc: d ? d.t : null, h: d ? d.h : null });
+            const t = Date.now();
+            hist.push({ t, v: c.battery ? c.battery.pack : null, i: c.current.a, tc: d ? d.t : null, h: d ? d.h : null });
             if (hist.length > 300) hist.shift();
+            // Riwayat sensor bertimestamp untuk skill get_sensor_history & automasi.
+            if (sensorHistory && typeof sensorHistory.ingest === 'function') {
+                try {
+                    sensorHistory.ingest({
+                        t, online: true,
+                        temp: d && d.ok ? d.t : null, hum: d && d.ok ? d.h : null,
+                        battery: c.battery ? c.battery.pack : null,
+                        soc: c.battery ? c.battery.soc : null,
+                        current: c.current ? c.current.a : null,
+                        rssi: j && Number.isFinite(j.rssi) ? j.rssi : null
+                    });
+                } catch { }
+            }
             evaluate(c);
         }
         push();
@@ -228,6 +243,7 @@ module.exports = ({ app, broadcast, notify }) => {
             ingest(j);
         } catch (e) {
             fails++;
+            lastError = e.message; lastErrorAt = Date.now();
             if (fails >= N('ESP32_OFFLINE_AFTER', 3) && online) {
                 online = false;
                 if (!fwstate.isBusy('esp32')) note(T('esp.tgOff', { e: e.message }), 'offline');   // saat OTA wajar tidak menjawab
@@ -366,5 +382,5 @@ module.exports = ({ app, broadcast, notify }) => {
         push();
     }
 
-    return { snapshot, setRelay, start, reload, stop };
+    return { snapshot, setRelay, start, reload, stop, resolveChannel };
 };

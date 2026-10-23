@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Agent — NodelixcoreOS</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #f3f4f6; color: #111827; }
+  header { background: #0f172a; color: #e5e7eb; padding: 14px 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header a { color: #93c5fd; text-decoration: none; font-size: 13px; }
+  header .spacer { flex: 1; }
+  main { max-width: 860px; margin: 0 auto; padding: 18px; }
+  .card { background: #fff; border-radius: 14px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,.06); margin-bottom: 14px; }
+  .muted { color: #6b7280; font-size: 13px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; background: #e5e7eb; }
+  .badge.ok { background: #dcfce7; color: #166534; }
+  .badge.warn { background: #fef3c7; color: #92400e; }
+  .badge.bad { background: #fee2e2; color: #991b1b; }
+  #messages { display: flex; flex-direction: column; gap: 10px; max-height: 52vh; overflow-y: auto; }
+  .msg { padding: 10px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.45; }
+  .msg.user { background: #dbeafe; align-self: flex-end; max-width: 85%; }
+  .msg.assistant { background: #f3f4f6; align-self: flex-start; max-width: 92%; }
+  .msg.error { background: #fee2e2; color: #7f1d1d; }
+  textarea { width: 100%; min-height: 74px; resize: vertical; border: 1px solid #d1d5db; border-radius: 10px; padding: 10px; font: inherit; }
+  button { cursor: pointer; border: 0; border-radius: 10px; padding: 9px 14px; font: inherit; font-weight: 600; background: #2563eb; color: #fff; }
+  button.secondary { background: #e5e7eb; color: #111827; }
+  button.danger { background: #dc2626; }
+  button:disabled { opacity: .55; cursor: default; }
+  .confirm { border: 1px solid #f59e0b; background: #fffbeb; border-radius: 12px; padding: 12px; margin-top: 8px; }
+  .confirm h3 { margin: 0 0 6px; font-size: 14px; }
+  .confirm pre { margin: 6px 0; white-space: pre-wrap; font-size: 13px; }
+  #features { font-size: 13px; color: #4b5563; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 AI Agent — NodelixcoreOS</h1>
+  <span id="status-badges" class="row"></span>
+  <span class="spacer"></span>
+  <a href="/">← Dashboard</a>
+</header>
+<main>
+  <div id="blocked" class="card hidden">
+    <p><strong>Sesi login diperlukan.</strong> Buka <a href="/">dashboard</a> lalu login, kemudian kembali ke halaman ini.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="badge" id="badge-model">model: -</span>
+      <span class="badge" id="badge-terminal">terminal: -</span>
+      <span class="badge" id="badge-history">riwayat: -</span>
+      <span class="spacer"></span>
+      <button class="secondary" id="btn-clear">Hapus riwayat</button>
+    </div>
+    <p id="features" class="muted" style="margin: 10px 0 0;"></p>
+  </div>
+
+  <div class="card">
+    <div id="messages"></div>
+    <div id="confirmations"></div>
+    <p class="muted" id="hint" style="margin:12px 0 6px;">Tindakan sensitif (buka pintu, ubah akses RFID, daftar kartu, shell di luar operasi aman, dll.) akan muncul sebagai tombol konfirmasi. Konfirmasi hanya berlaku sekali dan terikat pada sesi ini.</p>
+    <form id="form">
+      <textarea id="input" placeholder="Tulis pertanyaan atau perintah…" maxlength="8000"></textarea>
+      <div class="row" style="margin-top:10px;">
+        <button type="submit" id="btn-send">Kirim</button>
+        <span class="muted" id="state"></span>
+      </div>
+    </form>
+  </div>
+</main>
+<script src="/ai.js"></script>
+</body>
+</html>

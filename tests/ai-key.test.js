@@ -92,9 +92,15 @@ test('ai: GET /api/ai/status melaporkan hasKey/ready untuk halaman setup dan Pen
     assert.equal(b.ready, true);
     assert.equal(b.model, 'gemini-3.5-flash-lite');
 
+    // Perilaku baru (lihat README > AI Agent): model yang diketik pengguna TIDAK
+    // diganti diam-diam. Status melaporkan persis apa yang tersimpan; bila model itu
+    // sudah pensiun, daftar cadangan (GEMINI_FALLBACK_MODELS) yang dipakai dan
+    // pengguna melihatnya di jawaban/status.
     const legacy = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-1.5-flash' });
     const l = await legacy.get('/api/ai/status').then(r => r.body);
-    assert.equal(l.model, 'gemini-3.5-flash-lite', 'model lama gemini-1.5-flash otomatis diganti ke gemini-3.5-flash-lite');
+    assert.equal(l.model, 'gemini-1.5-flash', 'model pengguna tidak boleh diubah otomatis');
+    assert.equal(l.fallbackEnabled, true);
+    assert.ok(l.fallbackModels.length > 0, 'cadangan tetap tersedia saat model utama ditolak');
 });
 
 test('ai: fallback otomatis ke gemini-3.1-flash-lite saat model utama gagal (404)', async () => {
@@ -121,21 +127,21 @@ test('ai: fallback otomatis ke gemini-3.1-flash-lite saat model utama gagal (404
     assert.match(calls[1], /models\/gemini-3\.1-flash-lite:generateContent/);
 });
 
-test('ai: model 2.x di .env dialihkan ke gemini-3.5-flash-lite', async () => {
-    for (const old of ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'models/gemini-2.5-pro']) {
-        const { ai } = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: old });
-        assert.equal(ai.cfg().model, 'gemini-3.5-flash-lite', old + ' harus dialihkan');
+test('ai: model pengguna di .env tidak diganti otomatis (hanya awalan models/ dibuang)', async () => {
+    for (const user of ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-3.1-flash-lite']) {
+        const { ai } = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: user });
+        assert.equal(ai.cfg().model, user, user + ' harus dipertahankan apa adanya');
     }
-    const kept = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-3.1-flash-lite' });
-    assert.equal(kept.ai.cfg().model, 'gemini-3.1-flash-lite', 'model 3.x tidak diubah');
+    const prefixed = loadAi({ GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'models/gemini-3.1-flash-lite' });
+    assert.equal(prefixed.ai.cfg().model, 'gemini-3.1-flash-lite', 'awalan models/ dinormalkan tanpa mengganti model');
 });
 
-test('ai: saran model di pesan error Google dicoba lebih dulu', async () => {
+test('ai: saran model di pesan error Google hanya dipakai bila diaktifkan', async () => {
     const calls = [];
     const context = {
         module: { exports: {} }, __dirname: root, console,
         require: n => require(require.resolve(n, { paths: [root] })),
-        process: { env: { LANGUAGE: 'id', GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-3.5-flash-lite' }, uptime: () => 1 },
+        process: { env: { LANGUAGE: 'id', GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-3.5-flash-lite', GEMINI_HONOR_MODEL_SUGGESTION: 'true' }, uptime: () => 1 },
         fetch: async url => {
             calls.push(url);
             if (url.includes('models/gemini-3.5-flash-lite:')) {
@@ -151,6 +157,28 @@ test('ai: saran model di pesan error Google dicoba lebih dulu', async () => {
     assert.equal(reply, 'Dari saran');
     assert.equal(calls.length, 2);
     assert.match(calls[1], /models\/gemini-9-test:generateContent/, 'saran Google dicoba sebelum cadangan');
+
+    // Default: saran TIDAK dipakai, supaya model/tier biaya tidak berpindah diam-diam.
+    const calls2 = [];
+    const ctx2 = {
+        module: { exports: {} }, __dirname: root, console,
+        require: n => require(require.resolve(n, { paths: [root] })),
+        process: { env: { LANGUAGE: 'id', GEMINI_API_KEY: 'AQ.Baik', GEMINI_MODEL: 'gemini-3.5-flash-lite' }, uptime: () => 1 },
+        fetch: async url => {
+            calls2.push(url);
+            if (url.includes('models/gemini-3.5-flash-lite:')) {
+                return { ok: false, status: 404, json: async () => ({ error: { message: 'This model models/gemini-3.5-flash-lite is no longer available. Please use models/gemini-9-test.' } }) };
+            }
+            return { ok: true, status: 200, json: async () => ({ candidates: [{ content: { parts: [{ text: 'Dari cadangan' }] } }] }) };
+        },
+        AbortSignal, setTimeout, clearTimeout
+    };
+    vm.runInNewContext(source('ai.js'), ctx2);
+    const ai2 = ctx2.module.exports({});
+    assert.equal(await ai2.handleMessage('halo', 'chat-suggest-2'), 'Dari cadangan');
+    assert.equal(calls2.length, 2);
+    assert.match(calls2[1], /models\/gemini-3\.1-flash-lite:generateContent/, 'tanpa izin, yang dipakai adalah daftar cadangan');
+    assert.doesNotMatch(calls2[1], /gemini-9-test/);
 });
 
 test('ai: skill kirim file meneruskan jalur/caption ke bot dan hanya memakai chat aktif', async () => {

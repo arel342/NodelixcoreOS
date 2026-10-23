@@ -50,13 +50,23 @@ function fixName(n) {
 function run(cmd, timeout = 30000) {
   return new Promise(resolve => {
     const [bin, args] = sh(cmd);
-    let out = '', err = '', done = false, t;
-    const end = r => { if (!done) { done = true; clearTimeout(t); resolve(r); } };
-    const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '', err = '', done = false, t, killT;
+    const end = r => { if (!done) { done = true; clearTimeout(t); clearTimeout(killT); resolve(r); } };
+    // detached: proses jadi pemimpin grup supaya timeout mematikan juga anak-anaknya
+    // (find/grep/zip lewat su tidak boleh tertinggal saat batas waktu habis).
+    const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: process.platform !== 'win32' });
     c.stdout.setEncoding('utf8'); c.stderr.setEncoding('utf8');
     c.stdout.on('data', d => out += d);
     c.stderr.on('data', d => err += d);
-    t = setTimeout(() => { c.kill('SIGKILL'); end({ code: -2, out, err: T('st.timeout') }); }, timeout);
+    const killTree = sig => {
+      try { if (c.pid) process.kill(-c.pid, sig); else c.kill(sig); }
+      catch { try { c.kill(sig); } catch { } }
+    };
+    t = setTimeout(() => {
+      killTree('SIGTERM');
+      killT = setTimeout(() => killTree('SIGKILL'), 1500);
+      end({ code: -2, out, err: T('st.timeout') });
+    }, Math.max(1000, timeout));
     c.on('error', e => end({ code: -1, out, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }));
     c.on('close', code => end({ code, out, err }));
   });
@@ -121,6 +131,173 @@ async function ensure() {
   await resolving;
 }
 
+// ---------- Pemeriksaan jalur (mencegah keluar dari root lewat .. atau symlink) ----------
+const insidePath = (real, root) => {
+  if (!real || !root) return false;
+  const r = root.endsWith('/') ? root : root + '/';
+  return real === root.replace(/\/$/, '') || real.startsWith(r);
+};
+let rootRealCache = { at: 0, value: '' };
+async function rootReal(force = false) {
+  if (!force && rootRealCache.value && Date.now() - rootRealCache.at < 30000) return rootRealCache.value;
+  const r = await run(`${G()}mkdir -p ${q(ROOT)}; readlink -f ${q(ROOT)} 2>/dev/null || echo ${q(ROOT)}`);
+  const value = r.code === 0 ? (r.out.trim().split('\n').pop() || ROOT) : '';
+  rootRealCache = { at: Date.now(), value };
+  return value;
+}
+
+// Info satu jalur: jalur absolut, hasil readlink -f (symlink diselesaikan), dan
+// apakah hasilnya masih di dalam folder penyimpanan. Dipakai sebelum membaca/menulis.
+async function inspect(rel) {
+  await ensure();
+  const p = abs(rel);
+  const r = await run(`${G()}if [ -e ${q(p)} ] || [ -L ${q(p)} ]; then readlink -f ${q(p)} 2>/dev/null || echo ${q(p)}; stat -c '%F|%s|%Y' ${q(p)} 2>/dev/null || exit 4; else exit 4; fi`);
+  if (r.code !== 0) return { ok: false, code: r.code, abs: p };
+  const lines = r.out.trim().split('\n');
+  const meta = (lines.pop() || '').split('|');
+  const real = lines.pop() || p;
+  const root = await rootReal();
+  const dir = String(meta[0] || '').startsWith('directory');
+  return {
+    ok: true, abs: p, real, root, inside: insidePath(real, root),
+    isDirectory: dir, isFile: String(meta[0] || '').startsWith('regular'),
+    kind: meta[0] || '', size: Number(meta[1]) || 0, mtime: Number(meta[2]) || 0
+  };
+}
+
+class PathDenied extends Error {
+  constructor(message) { super(message); this.status = 403; this.code = 'PATH_DENIED'; }
+}
+class PathNotFound extends Error {
+  constructor(message) { super(message); this.status = 404; this.code = 'PATH_NOT_FOUND'; }
+}
+class PathExists extends Error {
+  constructor(message) { super(message); this.status = 400; this.code = 'PATH_EXISTS'; }
+}
+
+// Pastikan jalur ada DAN berada di dalam root penyimpanan (symlink ikut diperiksa).
+async function checked(rel, { mustExist = true } = {}) {
+  const info = await inspect(rel);
+  if (!info.ok) {
+    if (!mustExist) return info;
+    throw new PathNotFound(T('st.notFound'));
+  }
+  if (!info.inside) throw new PathDenied('Jalur keluar dari folder penyimpanan (symlink) ditolak.');
+  return info;
+}
+
+// Cari file di dalam satu subfolder. Nama file diperlakukan sebagai pola pencarian
+// (bukan perintah shell) dan selalu dikutip oleh q().
+async function search(relDir, { name = '', maxDepth = 3, limit = 25, offset = 0, timeoutMs = 5000 } = {}) {
+  await ensure();
+  const base = await checked(relDir || '', { mustExist: true });
+  if (!base.isDirectory) throw Object.assign(new Error('Jalur pencarian bukan folder.'), { status: 400 });
+  const depth = Math.max(1, Math.min(8, Math.floor(maxDepth) || 3));
+  const take = Math.max(1, Math.min(100, Math.floor(limit) || 25));
+  const skip = Math.max(0, Math.min(5000, Math.floor(offset) || 0));
+  const pattern = String(name || '').replace(/[\x00-\x1f]/g, '').slice(0, 100);
+  const glob = '*' + pattern + '*';
+  // find tidak mengikuti symlink (default -P); hasil diurutkan agar pagination stabil.
+  const cmd = `${G()}cd ${q(base.abs)} 2>/dev/null || exit 4; find . -maxdepth ${depth} -type f -iname ${q(glob)} -print 2>/dev/null | LC_ALL=C sort | head -n ${skip + take + 1}; exit 0`;
+  const r = await run(cmd, Math.max(1000, Math.min(10000, timeoutMs)));
+  if (r.code !== 0) throw fail(r, T('st.listFail'));
+  const all = r.out.split('\n').map(l => l.trim()).filter(Boolean);
+  const more = all.length > skip + take;
+  const page = all.slice(skip, skip + take).map(p => {
+    const clean = p.replace(/^\.\//, '');
+    return { path: (relDir ? String(relDir).replace(/\/+$/, '') + '/' : '') + clean, name: path.posix.basename(clean) };
+  });
+  return { results: page, offset: skip, limit: take, hasMore: more, scanned: all.length, dir: relDir || '' };
+}
+
+// Baca file teks dengan batas ukuran; file biner & konfigurasi rahasia ditolak.
+const TEXT_EXT = new Set(['txt', 'log', 'json', 'jsonl', 'js', 'mjs', 'cjs', 'ts', 'ino', 'md', 'csv', 'tsv', 'yml', 'yaml', 'ini', 'conf', 'cfg', 'sh', 'bash', 'py', 'html', 'htm', 'css', 'xml', 'properties', 'h', 'hpp', 'c', 'cpp', 'env', 'example', 'sql']);
+const SECRET_FILE = /^(?:\.env(?:\..*)?|\.netrc|\.npmrc|id_(?:rsa|dsa|ecdsa|ed25519)(?:\..*)?|credentials(?:\..*)?)$/i;
+const SECRET_EXT = /\.(?:pem|key|p12|pfx|jks|keystore|asc|gpg)$/i;
+
+function protectName(name) {
+  return SECRET_FILE.test(String(name)) || SECRET_EXT.test(String(name));
+}
+
+async function readTextFile(rel, { maxBytes = 200 * 1024 } = {}) {
+  const cap = Math.max(1024, Math.min(1024 * 1024, Math.floor(maxBytes) || 200 * 1024));
+  const info = await checked(rel, { mustExist: true });
+  if (info.isDirectory) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
+  if (protectName(path.posix.basename(rel))) throw new PathDenied('File konfigurasi rahasia (mis. .env/private key) tidak boleh dibaca melalui AI.');
+  const ext = path.posix.extname(String(rel)).slice(1).toLowerCase();
+  if (ext === 'bin' || ext === 'part') throw Object.assign(new Error('File biner tidak dapat dibaca sebagai teks.'), { status: 415 });
+  // head -c mengambil batas + 1 byte, base64 membuat isi aman melewati stdout shell.
+  const r = await run(`${G()}head -c ${cap + 1} ${q(info.abs)} 2>/dev/null | base64 | tr -d '\\n'; exit 0`, 30000);
+  if (r.code !== 0) throw fail(r, T('st.readFail'));
+  let buf;
+  try { buf = Buffer.from(String(r.out || '').trim(), 'base64'); }
+  catch { throw Object.assign(new Error('File tidak dapat dibaca sebagai teks.'), { status: 415 }); }
+  const truncated = buf.length > cap;
+  if (truncated) buf = buf.subarray(0, cap);
+  // Deteksi biner: byte NUL atau karakter kontrol yang tidak lazim.
+  let binary = false;
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (b === 0) { binary = true; break; }
+    if (b < 9 || (b > 13 && b < 32)) binary = true;
+  }
+  if (binary) throw Object.assign(new Error('File terdeteksi biner, bukan teks.'), { status: 415 });
+  const text = buf.toString('utf8');
+  if (/\uFFFD/.test(text.slice(0, 4096)) && !/[^\x00-\x7F]/.test(text)) {
+    throw Object.assign(new Error('File tidak dapat dibaca sebagai UTF-8.'), { status: 415 });
+  }
+  return {
+    path: String(rel), size: info.size, bytesRead: buf.length, truncated, text,
+    modified: info.mtime ? new Date(info.mtime * 1000).toISOString() : null
+  };
+}
+
+// Buat folder relatif (boleh bertingkat). Tidak menimpa folder yang sudah ada.
+async function mkdirPath(rel) {
+  const info = await inspect(rel);
+  if (info.ok) throw new PathExists(T('st.exists'));
+  if (!info.abs) throw new PathDenied('Jalur tidak valid.');
+  // Periksa setiap komponen yang SUDAH ada (termasuk symlink) sebelum mkdir -p,
+  // supaya folder baru tidak dibuat di luar root lewat symlink perantara.
+  const parts = String(rel).replace(/\/+$/, '').split('/');
+  let prefix = '';
+  for (let i = 0; i < parts.length; i++) {
+    prefix = prefix ? prefix + '/' + parts[i] : parts[i];
+    const cur = await inspect(prefix);
+    if (!cur.ok) continue;                          // komponen berikutnya akan dibuat baru
+    if (!cur.inside) throw new PathDenied('Jalur keluar dari folder penyimpanan (symlink) ditolak.');
+    if (i < parts.length - 1 && !cur.isDirectory)
+      throw Object.assign(new Error(`"${prefix}" bukan folder, jadi subfolder tidak dapat dibuat.`), { status: 400 });
+  }
+  await exec(`${G()}mkdir -p ${q(info.abs)}`, T('st.mkdirFail'));
+  return { path: String(rel) };
+}
+
+// Salin / pindahkan satu file atau folder. Tujuan tidak boleh sudah ada (tidak menimpa
+// secara diam-diam) dan folder tidak boleh dipindah ke dalam dirinya sendiri.
+async function transfer(kind, srcRel, dstRel) {
+  const src = await checked(srcRel, { mustExist: true });
+  const dstAbs = abs(dstRel);
+  if (dstAbs === ROOT) throw new PathDenied('Tidak boleh menimpa folder utama.');
+  if (src.abs === dstAbs) throw Object.assign(new Error('Sumber dan tujuan sama.'), { status: 400 });
+  if (dstAbs.startsWith(src.abs + '/')) throw Object.assign(new Error('Folder tidak boleh dipindah ke dalam dirinya sendiri.'), { status: 400 });
+  const parentRel = path.posix.dirname(String(dstRel).replace(/\/+$/, ''));
+  const parent = await checked(parentRel === '.' ? '' : parentRel, { mustExist: true });
+  if (!parent.isDirectory) throw Object.assign(new Error('Folder tujuan bukan folder.'), { status: 400 });
+  const exists = await inspect(dstRel);
+  if (exists.ok) throw new PathExists(T('st.exists'));
+  // Tujuan belum ada: pastikan folder induknya (yang sudah diselesaikan symlink-nya)
+  // tetap berada di dalam root.
+  if (!insidePath(parent.real, parent.root)) throw new PathDenied('Folder tujuan keluar dari folder penyimpanan.');
+  const op = kind === 'move' ? 'mv' : 'cp -r';
+  const r = await run(`${G()}[ -e ${q(dstAbs)} ] && exit 17; ${op} ${q(src.abs)} ${q(dstAbs)}`, 30 * 60 * 1000);
+  if (r.code !== 0) throw fail(r, kind === 'move' ? T('st.pasteFail') : T('st.pasteFail'));
+  return { from: String(srcRel), to: String(dstRel), kind };
+}
+
+const copyPath = (srcRel, dstRel) => transfer('copy', srcRel, dstRel);
+const movePath = (srcRel, dstRel) => transfer('move', srcRel, dstRel);
+
 // Pastikan folder upload ada (dibuat kalau belum ada), cek bisa ditulis, ambil sisa ruang
 async function status() {
   const rd = await resolveDevice();
@@ -176,8 +353,8 @@ function importFrom(srcDir, names) {
 
 // Kompres file/folder jadi <nama>.zip di folder yang sama (nama dibuat unik, ditulis ke .part dulu)
 async function compress(rel) {
-  await ensure();
-  const p = abs(rel);
+  const info = await checked(rel, { mustExist: true });
+  const p = info.abs;
   if (p === ROOT) throw Object.assign(new Error(T('st.rootNoCompress')), { status: 400 });
   // Semua nama diberi awalan ./ supaya file yang namanya diawali "-" tidak dianggap opsi oleh mv/zip/rm
   const r = await exec(`${G()}cd ${q(path.posix.dirname(p))} 2>/dev/null || exit 4; n=${q(path.posix.basename(p))}; [ -e "./$n" ] || exit 4; ` +
@@ -190,9 +367,10 @@ async function compress(rel) {
 async function send(res, rel, { inline = false, zip = false } = {}) {
   await ensure();
   const p = abs(rel);
-  const r = await run(`${G()}stat -c '%F|%s' ${q(p)} 2>/dev/null || exit 4`);
-  if (r.code !== 0 || p === ROOT) throw fail(r.code !== 0 ? r : { code: 4, err: '' });
-  const isDir = r.out.startsWith('directory'), name = path.posix.basename(p);
+  if (p === ROOT) throw fail({ code: 4, err: '' });
+  // Konten tidak boleh diambil lewat symlink yang keluar dari folder penyimpanan.
+  const info = await checked(rel, { mustExist: true });
+  const isDir = info.isDirectory, name = path.posix.basename(p);
   let cmd;
   if (isDir || zip) {   // folder selalu di-zip; file di-zip bila diminta (zip=1)
     if (inline) throw fail({ code: 4, err: '' });
@@ -202,7 +380,7 @@ async function send(res, rel, { inline = false, zip = false } = {}) {
     res.type(path.extname(name) || 'bin');
     // tampil langsung hanya untuk gambar/video/audio (bukan svg/html, supaya tidak menjalankan script)
     if (!inline || !/^(image\/(?!svg)|video\/|audio\/)/.test(res.get('Content-Type') || '')) res.attachment(name);
-    res.set({ 'Content-Length': r.out.trim().split('|')[1], 'Accept-Ranges': 'none', 'X-Content-Type-Options': 'nosniff' });
+    res.set({ 'Content-Length': String(info.size), 'Accept-Ranges': 'none', 'X-Content-Type-Options': 'nosniff' });
     cmd = `${G()}cat ${q(p)}`;
   }
   const [bin, args] = sh(cmd);
@@ -263,13 +441,10 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
 // Membaca file ke memori hanya untuk pengiriman Telegram; batas ukuran diperiksa
 // sebelum cat dimulai agar file besar tidak menghabiskan RAM perangkat.
 async function fileStream(rel) {
-  await ensure();
-  const p = abs(rel);
-  const stat = await run(`${G()}stat -c '%F|%s' ${q(p)} 2>/dev/null || exit 4`);
-  if (stat.code !== 0) throw fail(stat, T('st.notFound'));
-  const [kind, sizeText] = stat.out.trim().split('|');
-  if (kind.startsWith('directory')) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
-  const size = Number(sizeText);
+  const info = await checked(rel, { mustExist: true });
+  const p = info.abs;
+  if (info.isDirectory) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
+  const size = info.size;
   if (!Number.isSafeInteger(size)) throw new Error(T('st.readFail'));
   const { PassThrough } = require('stream');
   const output = new PassThrough();
@@ -285,13 +460,10 @@ async function fileStream(rel) {
 }
 
 async function readBuffer(rel, maxBytes = 49 * 1024 * 1024) {
-  await ensure();
-  const p = abs(rel);
-  const stat = await run(`${G()}stat -c '%F|%s' ${q(p)} 2>/dev/null || exit 4`);
-  if (stat.code !== 0) throw fail(stat, T('st.notFound'));
-  const [kind, sizeText] = stat.out.trim().split('|');
-  const size = Number(sizeText);
-  if (kind.startsWith('directory')) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
+  const info = await checked(rel, { mustExist: true });
+  const p = info.abs;
+  const size = info.size;
+  if (info.isDirectory) throw Object.assign(new Error('Jalur tersebut adalah folder, bukan file.'), { status: 400 });
   if (!Number.isSafeInteger(size) || size > maxBytes) throw Object.assign(new Error(`File melebihi batas Telegram (${Math.floor(maxBytes / 1024 / 1024)} MB).`), { status: 413 });
   return new Promise((resolve, reject) => {
     const [bin, args] = sh(`${G()}cat ${q(p)}`);
@@ -342,4 +514,4 @@ function engine() {
   };
 }
 
-module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs, saveStream, readBuffer, fileStream };
+module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs, saveStream, readBuffer, fileStream, inspect, checked, search, readTextFile, mkdirPath, copyPath, movePath, protectName, insidePath, PathDenied, PathNotFound, PathExists };
