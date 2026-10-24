@@ -25,8 +25,56 @@ const { createLocks } = require('./locks');
 const WAIT_MS = 5000;
 const MAX_TELEGRAM_RECEIVE_BYTES = 20 * 1024 * 1024;
 const MAX_TELEGRAM_SEND_BYTES = 49 * 1024 * 1024;
+const FILE_DOWNLOAD_TIMEOUT_MS = 10 * 60 * 1000;
 const TEXT_LIMIT = 3900;                 // di bawah 4096 agar aman
 const MAX_CHUNKS = 6;
+const ALLOWED_UPDATES = ['message', 'edited_message', 'callback_query'];
+
+const MIME_EXT = {
+    'video/mp4': '.mp4',
+    'video/quicktime': '.mov',
+    'video/x-matroska': '.mkv',
+    'video/webm': '.webm',
+    'video/3gpp': '.3gp',
+    'video/x-msvideo': '.avi',
+    'video/mpeg': '.mpg',
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp',
+    'image/gif': '.gif',
+    'image/heic': '.heic',
+    'image/heif': '.heif',
+    'audio/mpeg': '.mp3',
+    'audio/mp3': '.mp3',
+    'audio/mp4': '.m4a',
+    'audio/x-m4a': '.m4a',
+    'audio/aac': '.aac',
+    'audio/ogg': '.ogg',
+    'audio/opus': '.opus',
+    'audio/wav': '.wav',
+    'audio/x-wav': '.wav',
+    'audio/flac': '.flac',
+    'application/pdf': '.pdf',
+    'application/zip': '.zip'
+};
+const KIND_PREFIX = {
+    document: 'berkas',
+    video: 'video',
+    photo: 'foto',
+    animation: 'animasi',
+    audio: 'audio',
+    voice: 'suara',
+    video_note: 'videonote'
+};
+const KIND_DEFAULT_EXT = {
+    document: '',
+    video: '.mp4',
+    photo: '.jpg',
+    animation: '.mp4',
+    audio: '.mp3',
+    voice: '.ogg',
+    video_note: '.mp4'
+};
 
 function chunkText(text, limit = TEXT_LIMIT) {
     const s = String(text == null ? '' : text);
@@ -66,6 +114,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
     let offReason = '';
     let jobSeq = 0;
     const pendingUploads = new Map();
+    const mediaGroupFolders = new Map();    // chat:media_group_id -> { folder, expires }
     const seen = new Map();                 // update_id -> waktu (dedupe)
     const jobs = new Map();                 // id -> job
     const queue = [];
@@ -147,54 +196,226 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
     }
 
     // ---------- Unggah file Telegram -> flash disk ----------
+    function formatBytes(bytes) {
+        if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+        return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+
+    function combineSignals(signal, timeoutMs) {
+        const timeoutSig = AbortSignal.timeout(timeoutMs);
+        if (!signal) return timeoutSig;
+        if (typeof AbortSignal.any === 'function') return AbortSignal.any([signal, timeoutSig]);
+        return timeoutSig;
+    }
+
+    function hasUploadCaption(caption) {
+        const firstLine = String(caption || '').trim().split(/\r?\n/)[0].trim();
+        if (!firstLine) return false;
+        if (/^\/upload(?:@[a-z0-9_]+)?(?:\s|$)/i.test(firstLine)) return true;
+        return captionFolder(firstLine) !== null;
+    }
+
     function captionFolder(caption) {
-        const text = String(caption || '').trim();
-        const lower = text.toLowerCase();
-        if (lower.startsWith('/upload ')) return text.slice(8).trim();
-        if (lower.startsWith('folder:')) return text.slice(7).trim();
-        if (lower.startsWith('folder tujuan:')) return text.slice(14).trim();
-        if (lower.startsWith('ke folder ')) return text.slice(10).trim();
-        if (lower.startsWith('simpan ke folder ')) return text.slice(17).trim();
+        const firstLine = String(caption || '').trim().split(/\r?\n/)[0].trim();
+        if (!firstLine) return null;
+        let m = /^\/upload(?:@[a-z0-9_]+)?(?:\s+([\s\S]*))?$/i.exec(firstLine);
+        if (m) {
+            const arg = (m[1] || '').trim();
+            return arg ? arg : null;
+        }
+        m = /^(?:folder(?:\s+tujuan)?\s*:|simpan\s+ke\s+folder\s+|ke\s+folder\s+)([\s\S]*)$/i.exec(firstLine);
+        if (m) {
+            const arg = m[1].trim();
+            return arg ? arg : null;
+        }
         return null;
     }
 
     function cleanFolder(value) {
         let folder = String(value || '').trim();
+        if ((folder.startsWith('"') && folder.endsWith('"')) || (folder.startsWith("'") && folder.endsWith("'")) || (folder.startsWith('“') && folder.endsWith('”'))) {
+            folder = folder.slice(1, -1).trim();
+        }
         const lower = folder.toLowerCase();
-        if (['.', 'root', 'utama', 'folder utama'].includes(lower)) return '';
+        if (['.', './', 'root', 'utama', 'folder utama'].includes(lower)) return '';
         if (lower.startsWith('ke folder ')) folder = folder.slice(10).trim();
-        else if (lower.startsWith('folder:')) folder = folder.slice(7).trim();
-        if (!folder || folder.startsWith('/') || folder.includes(String.fromCharCode(92)) || folder.includes(String.fromCharCode(0)) || Array.from(folder).some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || folder.split('/').some(p => !p || p === '.' || p === '..')) return null;
+        else if (/^folder\s*:/.test(lower)) folder = folder.replace(/^folder\s*:\s*/i, '').trim();
+        if (!folder || folder.startsWith('/')) return null;
+        folder = folder.replace(/\/+$/, '');
+        if (!folder || folder.includes(String.fromCharCode(92)) || folder.includes(String.fromCharCode(0)) || Array.from(folder).some(c => c.charCodeAt(0) < 32 || c.charCodeAt(0) === 127) || folder.split('/').some(p => !p || p === '.' || p === '..')) return null;
         return folder;
     }
 
-    async function saveTelegramFile(file, folder, target) {
-        if (!file.file_id || !file.file_name) throw new Error('File Telegram tidak memiliki nama atau ID yang valid.');
+    async function resolveExistingFolder(destination) {
+        if (destination === '') {
+            await store.list('');
+            return '';
+        }
+        try {
+            await store.list(destination);
+            return destination;
+        } catch (err) {
+            if (!err || (err.code !== 'PATH_NOT_FOUND' && err.code !== 4 && err.status !== 404)) throw err;
+            // Cocokkan nama folder tanpa membedakan huruf besar/kecil bila satu-satunya yang cocok (mis. "/upload foto" -> "Foto")
+            const parts = destination.split('/');
+            let current = '';
+            for (const part of parts) {
+                const entries = await store.list(current);
+                const exact = entries.find(e => e.isDirectory && e.name === part);
+                if (exact) {
+                    current = current ? `${current}/${exact.name}` : exact.name;
+                    continue;
+                }
+                const matches = entries.filter(e => e.isDirectory && e.name.toLowerCase() === part.toLowerCase());
+                if (matches.length !== 1) throw err;
+                current = current ? `${current}/${matches[0].name}` : matches[0].name;
+            }
+            await store.list(current);
+            return current;
+        }
+    }
+
+    function pickBestPhoto(photos) {
+        const valid = (Array.isArray(photos) ? photos : []).filter(p => p && p.file_id);
+        if (!valid.length) return null;
+        const withinLimit = valid.filter(p => !p.file_size || p.file_size <= MAX_TELEGRAM_RECEIVE_BYTES);
+        const pool = withinLimit.length ? withinLimit : valid;
+        return pool.reduce((best, cur) => {
+            const bestArea = (best.width || 0) * (best.height || 0);
+            const curArea = (cur.width || 0) * (cur.height || 0);
+            if (curArea !== bestArea) return curArea > bestArea ? cur : best;
+            return (cur.file_size || 0) >= (best.file_size || 0) ? cur : best;
+        });
+    }
+
+    function buildFallbackFileName(kind, raw, message) {
+        const tsSec = Number(message && message.date);
+        const d = Number.isFinite(tsSec) && tsSec > 0 ? new Date(tsSec * 1000) : new Date();
+        const pad = n => String(n).padStart(2, '0');
+        const stamp = `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
+        const tag = String((message && message.message_id) || (raw && raw.file_unique_id) || '')
+            .replace(/[^A-Za-z0-9_-]/g, '').slice(-8);
+        const mime = String((raw && raw.mime_type) || '').split(';')[0].trim().toLowerCase();
+        const mimeExt = MIME_EXT[mime] || '';
+        const ext = mimeExt || KIND_DEFAULT_EXT[kind] || '';
+        const prefix = KIND_PREFIX[kind] || 'berkas';
+        return {
+            fileName: `${prefix}_${stamp}${tag ? '_' + tag : ''}${ext}`,
+            hasMimeExt: Boolean(mimeExt)
+        };
+    }
+
+    // Ekstrak berkas dari berbagai jenis pesan media Telegram (document, video, photo, animation, audio, video_note, voice).
+    function extractTelegramFile(message) {
+        if (!message) return null;
+        let kind = null, raw = null;
+        if (message.document) {
+            // Pada GIF/MP4 tanpa suara, Telegram mengisi message.animation sekaligus message.document.
+            kind = message.animation ? 'animation' : 'document';
+            raw = message.document;
+        } else if (message.video) {
+            kind = 'video';
+            raw = message.video;
+        } else if (Array.isArray(message.photo) && message.photo.length) {
+            kind = 'photo';
+            raw = pickBestPhoto(message.photo);
+        } else if (message.animation) {
+            kind = 'animation';
+            raw = message.animation;
+        } else if (message.video_note) {
+            kind = 'video_note';
+            raw = message.video_note;
+        } else if (message.audio) {
+            kind = 'audio';
+            raw = message.audio;
+        } else if (message.voice) {
+            kind = 'voice';
+            raw = message.voice;
+        }
+        if (!raw || !raw.file_id) return null;
+        const cleaned = raw.file_name
+            ? (typeof store.cleanName === 'function' ? store.cleanName(raw.file_name) : path.posix.basename(String(raw.file_name).trim()))
+            : null;
+        if (cleaned) {
+            return {
+                kind,
+                file_id: raw.file_id,
+                file_unique_id: raw.file_unique_id || '',
+                file_size: Number(raw.file_size || 0),
+                mime_type: String(raw.mime_type || ''),
+                file_name: cleaned,
+                generatedName: false,
+                hasMimeExt: true
+            };
+        }
+        const fb = buildFallbackFileName(kind, raw, message);
+        return {
+            kind,
+            file_id: raw.file_id,
+            file_unique_id: raw.file_unique_id || '',
+            file_size: Number(raw.file_size || 0),
+            mime_type: String(raw.mime_type || ''),
+            file_name: fb.fileName,
+            generatedName: true,
+            hasMimeExt: fb.hasMimeExt
+        };
+    }
+
+    async function saveTelegramFile(file, folder, target, signal) {
+        if (!file || !file.file_id || !file.file_name) throw new Error('File Telegram tidak memiliki nama atau ID yang valid.');
         if (file.file_size && file.file_size > MAX_TELEGRAM_RECEIVE_BYTES) throw new Error('Ukuran file melebihi batas unduhan Telegram saat ini (20 MB).');
-        const info = await api('getFile', { file_id: file.file_id });
+        let info;
+        try {
+            info = await api('getFile', { file_id: file.file_id }, 90000);
+        } catch (e) {
+            if (/file is too big/i.test(String(e && e.message))) {
+                throw new Error('Ukuran file melebihi batas unduhan Telegram saat ini (20 MB).');
+            }
+            throw e;
+        }
         if (!info || !info.file_path) throw new Error('Telegram tidak memberikan lokasi file.');
+        let fileName = file.file_name;
+        if (file.generatedName) {
+            const remoteExt = path.posix.extname(String(info.file_path || '')).toLowerCase();
+            if (/^\.[a-z0-9]{1,8}$/.test(remoteExt)) {
+                const curExt = path.posix.extname(fileName);
+                if (!curExt) fileName = fileName + remoteExt;
+                else if (!file.hasMimeExt && curExt.toLowerCase() !== remoteExt) fileName = fileName.slice(0, -curExt.length) + remoteExt;
+            }
+        }
         const encoded = info.file_path.split('/').map(encodeURIComponent).join('/');
-        const r = await fetch(`https://api.telegram.org/file/bot${token()}/${encoded}`, { signal: AbortSignal.timeout(120000) });
-        if (!r.ok || !r.body) throw new Error(`Gagal mengunduh file dari Telegram (HTTP ${r.status}).`);
+        const r = await fetch(`https://api.telegram.org/file/bot${token()}/${encoded}`, {
+            signal: combineSignals(signal, FILE_DOWNLOAD_TIMEOUT_MS)
+        });
+        if (!r.ok || !r.body) {
+            if (r.body) try { await r.body.cancel(); } catch { }
+            throw new Error(`Gagal mengunduh file dari Telegram (HTTP ${r.status}).`);
+        }
         const size = Number(r.headers.get('content-length') || file.file_size || 0);
-        if (size > MAX_TELEGRAM_RECEIVE_BYTES) { await r.body.cancel(); throw new Error('Ukuran file melebihi batas unduhan Telegram saat ini (20 MB).'); }
-        const saved = await store.saveStream(folder, file.file_name, Readable.fromWeb(r.body), MAX_TELEGRAM_RECEIVE_BYTES);
-        await send(`✅ File “${saved.filename}” disimpan di ${folder ? folder + '/' : 'folder utama'} flash disk (${(saved.size / 1024).toFixed(1)} KB).`, target);
+        if (size > MAX_TELEGRAM_RECEIVE_BYTES) {
+            try { await r.body.cancel(); } catch { }
+            throw new Error('Ukuran file melebihi batas unduhan Telegram saat ini (20 MB).');
+        }
+        const saved = await store.saveStream(folder, fileName, Readable.fromWeb(r.body), MAX_TELEGRAM_RECEIVE_BYTES);
+        await send(`✅ File “${saved.filename}” disimpan di ${folder ? folder + '/' : 'folder utama'} flash disk (${formatBytes(saved.size)}).`, target);
         return saved;
     }
 
     async function askUploadFolder(message, file) {
         const chat = String(message.chat.id);
         const pending = pendingUploads.get(chat);
-        if (pending) return send(`Masih menunggu folder untuk “${pending.file.file_name}”. Balas nama folder, “.” untuk folder utama, atau /cancelupload.`, message.chat.id);
-        pendingUploads.set(chat, { file, expires: Date.now() + 10 * 60 * 1000 });
+        if (pending && pending.expires >= Date.now()) {
+            return send(`Masih menunggu folder untuk “${pending.file.file_name}”. Balas nama folder, “.” untuk folder utama, atau /cancelupload.`, message.chat.id);
+        }
+        if (pending) pendingUploads.delete(chat);
+        pendingUploads.set(chat, { file, messageId: message.message_id, expires: Date.now() + 10 * 60 * 1000 });
         const question = aiMod && typeof aiMod.askUploadDestination === 'function'
             ? await aiMod.askUploadDestination(file.file_name)
             : `File “${file.file_name}” diterima. Mau disimpan ke folder mana? Balas nama folder (misalnya Dokumen) atau “.” untuk folder utama.`;
         return send(question, message.chat.id);
     }
 
-    async function handlePendingUpload(message) {
+    async function handlePendingUpload(message, job) {
         const chat = String(message.chat.id), pending = pendingUploads.get(chat);
         if (!pending) return false;
         if (pending.expires < Date.now()) {
@@ -202,32 +423,65 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
             await send('Waktu memilih folder sudah habis. Kirim ulang file untuk memulai lagi.', message.chat.id);
             return true;
         }
-        const folder = cleanFolder(message.text);
+        const extracted = captionFolder(message.text);
+        const folder = cleanFolder(extracted !== null ? extracted : message.text);
         if (folder === null) {
             await send('Nama folder tidak valid. Balas nama folder yang sudah ada, “.” untuk folder utama, atau /cancelupload.', message.chat.id);
             return true;
         }
+        const ctrl = new AbortController();
+        if (job) job.ctrl = ctrl;
         try {
-            await store.list(folder); // pastikan folder tujuan benar-benar ada
-            await lock.run('storage', () => saveTelegramFile(pending.file, folder, message.chat.id));
+            const targetFolder = await resolveExistingFolder(folder); // pastikan folder tujuan benar-benar ada
+            if (job && job.cancelled) return true;
+            await lock.run('storage', () => saveTelegramFile(pending.file, targetFolder, message.chat.id, ctrl.signal));
             pendingUploads.delete(chat);
         } catch (e) {
+            if (job && job.cancelled) return true;
             await send(`Belum berhasil menyimpan file: ${e.message}\nPilih folder lain atau kirim /cancelupload.`, message.chat.id);
         }
         return true;
     }
 
-    async function receiveDocument(message) {
-        const file = message.document;
-        const folder = captionFolder(message.caption);
+    async function receiveMedia(message, media, job) {
+        const file = media || extractTelegramFile(message);
+        if (!file) return;
+        const chat = String(message.chat.id);
+        if (file.file_size && file.file_size > MAX_TELEGRAM_RECEIVE_BYTES) {
+            return send(`⚠️ Ukuran file (${formatBytes(file.file_size)}) melebihi batas unduhan Telegram saat ini (20 MB). Untuk file > 20 MB, unggah melalui dashboard web.`, message.chat.id);
+        }
+        let folder = captionFolder(message.caption);
+        if (message.media_group_id) {
+            const gKey = `${chat}:${message.media_group_id}`;
+            if (folder !== null) {
+                mediaGroupFolders.set(gKey, { folder, expires: Date.now() + 2 * 60 * 1000 });
+            } else {
+                const cached = mediaGroupFolders.get(gKey);
+                if (cached && cached.expires > Date.now()) folder = cached.folder;
+                else if (cached) mediaGroupFolders.delete(gKey);
+            }
+        }
         if (folder === null) return askUploadFolder(message, file);
         const destination = cleanFolder(folder);
-        if (destination === null) return send('Folder pada caption tidak valid. Kirim ulang file dengan caption “/upload nama_folder”, atau kirim tanpa caption untuk ditanya foldernya.', message.chat.id);
+        if (destination === null) {
+            pendingUploads.set(chat, { file, messageId: message.message_id, expires: Date.now() + 10 * 60 * 1000 });
+            return send('⚠️ Folder pada caption tidak valid. Balas dengan nama folder tujuan yang sudah ada, “.” untuk folder utama, atau /cancelupload (tidak perlu kirim ulang file).', message.chat.id);
+        }
+        const ctrl = new AbortController();
+        if (job) job.ctrl = ctrl;
         try {
-            await store.list(destination);
-            await lock.run('storage', () => saveTelegramFile(file, destination, message.chat.id));
+            const targetFolder = await resolveExistingFolder(destination);
+            if (job && job.cancelled) return;
+            await lock.run('storage', () => saveTelegramFile(file, targetFolder, message.chat.id, ctrl.signal));
         } catch (e) {
-            await send(`Gagal menyimpan file: ${e.message}. Pastikan folder tujuan sudah ada.`, message.chat.id);
+            if (job && job.cancelled) return;
+            const notFound = e && (e.code === 'PATH_NOT_FOUND' || e.code === 4 || e.status === 404);
+            if (notFound) {
+                pendingUploads.set(chat, { file, messageId: message.message_id, expires: Date.now() + 10 * 60 * 1000 });
+                await send(`⚠️ Folder “${destination}” belum ada di flash disk.\nBalas dengan nama folder yang sudah ada, “.” untuk folder utama, atau /cancelupload (tidak perlu kirim ulang file).`, message.chat.id);
+                return;
+            }
+            await send(`Gagal menyimpan file: ${e.message}`, message.chat.id);
         }
     }
 
@@ -317,10 +571,11 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
         return [...jobs.values()].filter(j => String(j.chatId) === String(chat) && (j.status === 'queued' || j.status === 'running'));
     }
 
-    // Bersihkan job lama
+    // Bersihkan job & state sementara yang sudah kedaluwarsa
     setInterval(() => {
         const t = Date.now();
         for (const [id, j] of jobs) if (j.finishedAt && t - j.finishedAt > 10 * 60 * 1000) jobs.delete(id);
+        for (const [k, v] of mediaGroupFolders) if (v.expires < t) mediaGroupFolders.delete(k);
     }, 60000).unref();
 
     // ---------- Konfirmasi (callback tombol) ----------
@@ -388,7 +643,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
         '/close — tutup/kunci pintu',
         '/addcard [nama] — tambah kartu; tempelkan kartu saat diminta',
         '/cancelcard — batalkan tambah kartu',
-        '/upload <folder> — petunjuk mengirim dokumen ke flash disk',
+        '/upload <folder> — petunjuk mengirim berkas/media ke flash disk',
         '/cancelupload — batalkan pilihan folder file Telegram',
         '/web off|on — matikan/nyalakan hanya web dan WebSocket',
         '/ai <pertanyaan> — tanya AI Agent (Gemini)',
@@ -478,7 +733,13 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
 
         try {
             if (cmd === 'start' || cmd === 'help') return send(help, chat);
-            if (cmd === 'upload') return send('Kirim dokumen ke bot. Tanpa folder tujuan saya akan menanyakannya; atau isi caption dengan /upload nama_folder. Folder tujuan harus sudah ada di flash disk.', chat);
+            if (cmd === 'upload') {
+                if (args && pendingUploads.has(String(chat))) {
+                    enqueue({ kind: 'file', chatId: String(chat), label: 'folder file', run: job => handlePendingUpload({ ...message, text: args }, job) });
+                    return;
+                }
+                return send('Kirim dokumen, foto, video, atau audio ke bot (maks. 20 MB). Tanpa folder tujuan saya akan menanyakannya; atau isi caption dengan /upload nama_folder (atau /upload . untuk folder utama). Folder tujuan harus sudah ada di flash disk.', chat);
+            }
             if (cmd === 'cancelupload') {
                 const removed = pendingUploads.delete(String(chat));
                 return send(removed ? '❌ Pilihan folder dan penerimaan file dibatalkan.' : 'Tidak ada file yang menunggu folder tujuan.', chat);
@@ -595,31 +856,52 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
 
     async function handleUpdate(update) {
         if (update.callback_query) return handleCallback(update.callback_query);
-        const message = update.message;
+        const edited = Boolean(update.edited_message && !update.message);
+        const message = update.message || update.edited_message;
         if (!message || !message.chat) return;
         if (message.chat.type !== 'private') return;
         const chat = String(message.chat.id);
-        if (chat !== chatId()) {
-            console.warn(chatId()
-                ? `[Telegram] Perintah diabaikan dari chat yang tidak diizinkan (${chat}).`
-                : `[Telegram] Isi TELEGRAM_CHAT_ID=${chat} (web: Pengaturan > Telegram) untuk mengizinkan bot bagi chat pribadi ini.`);
+        const allowedChat = String(chatId()).trim();
+        if (chat !== allowedChat) {
+            if (!edited) {
+                console.warn(allowedChat
+                    ? `[Telegram] Perintah diabaikan dari chat yang tidak diizinkan (${chat}).`
+                    : `[Telegram] Isi TELEGRAM_CHAT_ID=${chat} (web: Pengaturan > Telegram) untuk mengizinkan bot bagi chat pribadi ini.`);
+            }
             return;
         }
 
-        if (message.document) {
-            enqueue({ kind: 'file', chatId: chat, label: message.document.file_name || '', run: () => receiveDocument(message) });
+        if (edited) {
+            // Hanya proses edit pesan bila pengguna menambahkan/mengubah caption upload pada berkas/media.
+            if (!hasUploadCaption(message.caption)) return;
+            const editedMedia = extractTelegramFile(message);
+            if (!editedMedia) return;
+            const pending = pendingUploads.get(chat);
+            if (pending && ((pending.file.file_unique_id && pending.file.file_unique_id === editedMedia.file_unique_id) || pending.messageId === message.message_id)) {
+                pendingUploads.delete(chat);
+            }
+            enqueue({ kind: 'file', chatId: chat, label: editedMedia.file_name || '', run: job => receiveMedia(message, editedMedia, job) });
             return;
         }
-        if (message.voice || message.audio) {
-            const caption = String(message.caption || '').trim().toLowerCase();
-            if (caption.startsWith('/transcribe')) return enqueue({ kind: 'voice', chatId: chat, label: 'transkripsi', run: () => transcribeCommand(message, message.caption.replace(/^\/transcribe\s*/i, '')) });
-            return send('🎙️ Pesan suara TIDAK otomatis dikirim ke provider AI. Balas pesan ini dengan /transcribe bila ingin ditranskripsi (fitur opsional).', chat);
+
+        const rawCaption = String(message.caption || '').trim();
+        if ((message.voice || message.audio) && /^\/transcribe(?:@[a-z0-9_]+)?(?:\s|$)/i.test(rawCaption)) {
+            const args = rawCaption.replace(/^\/transcribe(?:@[a-z0-9_]+)?\s*/i, '');
+            return enqueue({ kind: 'voice', chatId: chat, label: 'transkripsi', run: () => transcribeCommand(message, args) });
+        }
+        if (message.voice && !hasUploadCaption(rawCaption)) {
+            return send('🎙️ Pesan suara TIDAK otomatis dikirim ke provider AI. Balas pesan ini dengan /transcribe bila ingin ditranskripsi (fitur opsional), atau beri caption /upload <folder> untuk menyimpannya.', chat);
+        }
+        const media = extractTelegramFile(message);
+        if (media) {
+            enqueue({ kind: 'file', chatId: chat, label: media.file_name || '', run: job => receiveMedia(message, media, job) });
+            return;
         }
         const text = String(message.text || '').trim();
         if (!text) return;
         if (text.startsWith('/')) return command(message);
         if (pendingUploads.has(chat)) {
-            enqueue({ kind: 'file', chatId: chat, label: 'folder file', run: () => handlePendingUpload({ ...message, text }) });
+            enqueue({ kind: 'file', chatId: chat, label: 'folder file', run: job => handlePendingUpload({ ...message, text }, job) });
             return;
         }
         if (aiMod && typeof aiMod.handleMessageEx === 'function') {
@@ -632,7 +914,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
     async function poll() {
         if (!running) return;
         try {
-            const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ['message', 'callback_query'] }, 35000);
+            const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ALLOWED_UPDATES }, 35000);
             for (const update of updates) {
                 offset = update.update_id + 1;     // ack segera; pekerjaan berjalan async
                 if (seenBefore(update.update_id)) continue;
@@ -656,7 +938,7 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
         offReason = '';
         if (!chatId()) console.warn('[Telegram] Isi Chat ID Telegram dengan ID chat pribadi admin sebelum memakai bot.');
         try {
-            const pending = await api('getUpdates', { timeout: 0, allowed_updates: ['message', 'callback_query'] }, 8000);
+            const pending = await api('getUpdates', { timeout: 0, allowed_updates: ALLOWED_UPDATES }, 8000);
             if (pending.length) {
                 offset = pending[pending.length - 1].update_id + 1;   // update lama tidak dijalankan ulang
                 if (!chatId()) {

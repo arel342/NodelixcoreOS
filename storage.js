@@ -405,16 +405,33 @@ async function send(res, rel, { inline = false, zip = false } = {}) {
 // Simpan stream (mis. file yang dikirim ke bot Telegram) langsung ke flash disk.
 // Nama yang sudah ada tidak ditimpa dan file parsial dibersihkan jika transfer gagal.
 async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) {
-  await ensure();
-  const name = cleanName(rawName);
-  if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
-  const dir = abs(relDir || ''), dest = dir + '/' + name, tmp = `${dest}.${Date.now().toString(36)}.part`;
-  const prep = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; mkdir -p ${q(dir)}`);
-  if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
+  const destroyStream = () => {
+    if (stream && typeof stream.destroy === 'function' && !stream.destroyed) {
+      try { stream.destroy(); } catch { }
+    }
+  };
+  let name, dir, dest, tmp;
+  try {
+    await ensure();
+    name = cleanName(rawName);
+    if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+    dir = abs(relDir || '');
+    dest = dir + '/' + name;
+    tmp = `${dest}.${Date.now().toString(36)}.part`;
+    const prep = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; mkdir -p ${q(dir)}`);
+    if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
+  } catch (e) {
+    destroyStream();
+    throw e;
+  }
   const [bin, args] = sh(`${G()}cat > ${q(tmp)}`);
-  const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+  const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
   let bytes = 0, err = '';
   c.stderr.on('data', d => { err += d; });
+  const killTree = sig => {
+    try { if (c.pid && process.platform !== 'win32') process.kill(-c.pid, sig); else c.kill(sig); }
+    catch { try { c.kill(sig); } catch { } }
+  };
   const { Transform } = require('stream');
   const limiter = new Transform({ transform(chunk, encoding, callback) {
     bytes += chunk.length;
@@ -422,19 +439,36 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     callback(null, chunk);
   }});
   const closedPromise = new Promise(resolve => c.once('close', code => resolve(code)));
+  let closeTimer = null;
   try {
     await new Promise((resolve, reject) => {
       const { pipeline } = require('stream');
       pipeline(stream, limiter, c.stdin, e => e ? reject(e) : resolve());
       c.once('error', e => reject(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
     });
-    const closed = await closedPromise;
+    const closed = await Promise.race([
+      closedPromise,
+      new Promise(resolve => {
+        closeTimer = setTimeout(() => {
+          killTree('SIGTERM');
+          const hard = setTimeout(() => killTree('SIGKILL'), 1500);
+          if (hard.unref) hard.unref();
+          resolve(-2);
+        }, 120000);
+        if (closeTimer.unref) closeTimer.unref();
+      })
+    ]);
+    if (closeTimer) clearTimeout(closeTimer);
+    if (closed === -2) throw fail({ code: -2, err: T('st.timeout') }, T('st.saveFail'));
     if (closed !== 0) throw fail({ code: closed, err }, T('st.saveFail'));
     const r = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; [ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] && mv ${q(tmp)} ${q(dest)}`, 120000);
     if (r.code !== 0) throw fail(r, T('st.saveFileFail'));
     return { filename: name, size: bytes };
   } catch (e) {
-    try { c.kill(); } catch { }
+    if (closeTimer) clearTimeout(closeTimer);
+    destroyStream();
+    killTree('SIGTERM');
+    await Promise.race([closedPromise, new Promise(r => setTimeout(r, 1500))]);
     await run(`${G()}rm -f ${q(tmp)}`);
     throw e;
   }
