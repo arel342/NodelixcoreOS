@@ -8,6 +8,7 @@
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Barlow+Condensed:wght@500;600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="monitor.css">
+    <link rel="stylesheet" href="media.css">
     <script src="i18n.js"></script>
     <style>
         body {
@@ -663,6 +664,7 @@
         let isLongPressTriggered = false;
 
         function showView(viewId) {
+            if (window.closeMediaViewer) closeMediaViewer();
             document.getElementById('view-login').classList.add('hidden');
             document.getElementById('view-forgot').classList.add('hidden');
             document.getElementById('view-reset').classList.add('hidden');
@@ -922,7 +924,14 @@
                 const tr = document.createElement('tr');
                 tr.className = `transition-colors cursor-pointer ${isSelected ? 'bg-blue-50/70' : 'hover:bg-gray-50/80'}`;
 
-                const encodedName = encodeURIComponent(file.name);
+                const encodedName = encodeURIComponent(file.name).replace(/'/g, '%27');
+                const mediaKind = file.isDirectory ? '' : fileMediaKind(file.name);
+                if (file.isDirectory || mediaKind) {
+                    tr.tabIndex = 0;
+                    tr.addEventListener('keydown', e => {
+                        if (e.target === tr && e.key === 'Enter') { e.preventDefault(); handleRowClick(e, file); }
+                    });
+                }
 
                 // Event listener Touch & Click
                 tr.addEventListener('touchstart', (e) => startLongPress(e, file.name), { passive: true });
@@ -939,7 +948,8 @@
                 } else if (file.isDirectory) {
                     iconHtml = `<i class="fa-solid fa-folder text-amber-500 text-base"></i>`;
                 } else {
-                    iconHtml = `<i class="fa-regular fa-file-image text-orange-500 text-base"></i>`;
+                    const icon = mediaKind === 'video' ? 'fa-file-video' : mediaKind === 'image' ? 'fa-file-image' : 'fa-file';
+                    iconHtml = `<i class="fa-regular ${icon} text-orange-500 text-base"></i>`;
                 }
 
                 tr.innerHTML = `
@@ -955,6 +965,9 @@
                         </button>
 
                         <div id="action-menu-${encodedName}" class="action-dropdown hidden absolute right-8 top-2 bg-white border border-gray-200 rounded-xl shadow-lg z-50 py-1 w-44 text-left" role="menu">
+                            ${mediaKind ? `<button role="menuitem" onclick="event.stopPropagation(); openMediaFile('${encodedName}')" class="w-full px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 flex items-center gap-2">
+                                <i class="fa-solid fa-eye text-blue-600 w-4"></i> ${escapeHtml(t('media.open'))}
+                            </button>` : ''}
                             ${file.isDirectory ? '' : `<button role="menuitem" onclick="downloadSingleItem('${encodedName}')" class="w-full px-3 py-2 text-xs text-gray-700 hover:bg-gray-100 flex items-center gap-2">
                                 <i class="fa-solid fa-download text-green-600 w-4"></i> ${escapeHtml(t('fs.download'))}
                             </button>`}
@@ -1006,9 +1019,10 @@
             if (selectedFiles.size > 0) {
                 toggleFileSelection(file.name);
             } else {
-                // Jika tidak ada mode seleksi & yang ditekan adalah folder -> BUKA FOLDER!
                 if (file.isDirectory) {
                     openFolder(file.name);
+                } else if (fileMediaKind(file.name)) {
+                    openMediaFile(encodeURIComponent(file.name));
                 }
             }
         }
@@ -1321,6 +1335,7 @@
             fetch('/api/session').then(r => r.json()).then(d => { if (d.authenticated) initAppShell(); }).catch(() => { });
         });
     </script>
+    <script src="media.js"></script>
     <script src="ui.js"></script>
     <script src="monitor.js"></script>
     <script src="door.js"></script>

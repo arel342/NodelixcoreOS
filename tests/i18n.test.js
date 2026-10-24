@@ -52,7 +52,7 @@ const webFiles = [
     'public/index.html', 'public/setup.html',
     'public/monitor.js', 'public/door.js', 'public/system.js', 'public/firmware.js',
     'public/terminal.js', 'public/upload.js', 'public/ui.js', 'public/settings.js',
-    'public/setup.js', 'public/i18n.js'
+    'public/setup.js', 'public/i18n.js', 'public/media.js'
 ];
 
 test('i18n web: tiga bahasa punya daftar kunci yang sama', () => {

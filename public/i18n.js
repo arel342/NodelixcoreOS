@@ -206,6 +206,10 @@
             'dnote.dupToast': 'Kartu sudah terdaftar: {name}', 'dnote.addedToast': 'Kartu baru ditambahkan: {name}',
             'dnote.timeoutToast': 'Waktu tambah kartu habis',
 
+            'media.open': 'Buka pratinjau', 'media.close': 'Tutup', 'media.prev': 'Sebelumnya', 'media.next': 'Berikutnya',
+            'media.loading': 'Memuat media dari flashdisk…',
+            'media.imageError': 'Foto gagal dibuka. Periksa koneksi/flashdisk dan sesi login. Jika format tidak didukung browser, gunakan Download.',
+            'media.videoError': 'Video gagal diputar. Periksa koneksi/flashdisk dan sesi login. Jika format atau codec tidak didukung browser, gunakan Download. MP4 dengan H.264/AAC biasanya paling kompatibel.',
             'fs.mkFolder': 'Buat Folder', 'fs.upload': 'Upload', 'fs.paste': 'Paste', 'fs.download': 'Download',
             'fs.cut': 'Cut', 'fs.copy': 'Copy', 'fs.checking': 'Memeriksa flash disk…', 'fs.root': 'Root',
             'fs.thName': 'Name', 'fs.thMod': 'Last modified', 'fs.thSize': 'File size', 'fs.thAction': 'Action',
@@ -539,6 +543,10 @@
             'dnote.dupToast': 'Card already registered: {name}', 'dnote.addedToast': 'New card added: {name}',
             'dnote.timeoutToast': 'Add-card time expired',
 
+            'media.open': 'Open preview', 'media.close': 'Close', 'media.prev': 'Previous', 'media.next': 'Next',
+            'media.loading': 'Loading media from the flash drive…',
+            'media.imageError': 'Cannot open this photo. Check the connection/drive and your login session. Download it if the browser does not support its format.',
+            'media.videoError': 'Cannot play this video. Check the connection/drive and your login session. Download it if the browser does not support its format or codec. MP4 with H.264/AAC is usually the most compatible.',
             'fs.mkFolder': 'New Folder', 'fs.upload': 'Upload', 'fs.paste': 'Paste', 'fs.download': 'Download',
             'fs.cut': 'Cut', 'fs.copy': 'Copy', 'fs.checking': 'Checking flash drive…', 'fs.root': 'Root',
             'fs.thName': 'Name', 'fs.thMod': 'Last modified', 'fs.thSize': 'File size', 'fs.thAction': 'Action',
@@ -872,6 +880,10 @@
             'dnote.dupToast': '卡片已注册：{name}', 'dnote.addedToast': '新卡片已添加：{name}',
             'dnote.timeoutToast': '添加卡片时间已超时',
 
+            'media.open': '打开预览', 'media.close': '关闭', 'media.prev': '上一个', 'media.next': '下一个',
+            'media.loading': '正在从 U 盘加载媒体……',
+            'media.imageError': '无法打开照片。请检查网络、U 盘和登录状态。如浏览器不支持此格式，请下载文件。',
+            'media.videoError': '无法播放视频。请检查网络、U 盘和登录状态。如浏览器不支持此格式或编码，请下载文件。MP4（H.264/AAC）通常兼容性最好。',
             'fs.mkFolder': '新建文件夹', 'fs.upload': '上传', 'fs.paste': '粘贴', 'fs.download': '下载',
             'fs.cut': '剪切', 'fs.copy': '复制', 'fs.checking': '正在检查 U 盘……', 'fs.root': '根目录',
             'fs.thName': '名称', 'fs.thMod': '修改时间', 'fs.thSize': '文件大小', 'fs.thAction': '操作',

@@ -13,6 +13,7 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Login administrator
 * File manager berbasis web
 * Upload dan download file
+* Pratinjau foto dan pemutar video langsung di web, termasuk geser durasi (HTTP Range)
 * Membuat folder
 * Rename file/folder
 * Copy dan move file
@@ -47,6 +48,25 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 ### Flash disk
 
 Flash disk yang terpasang dideteksi otomatis, jadi ID/nama mount tidak perlu diubah saat mengganti flash disk. Pastikan hanya satu volume eksternal yang terpasang agar aplikasi dapat memilihnya dengan aman; jika beberapa volume terpasang sekaligus, aplikasi meminta volume lain dilepas. Folder penyimpanan di setiap flash disk adalah `upload` secara default.
+
+### Membuka foto dan video
+
+Di tab **Storage**, klik/tap file foto atau video, atau pilih **⋮ → Buka pratinjau**.
+Penampil menyediakan tombol Sebelumnya/Berikutnya dalam folder yang sama, Download,
+dan Tutup (juga bisa menekan Escape). Video memiliki kontrol putar, jeda, volume,
+geser durasi, dan layar penuh sesuai dukungan browser. Tekan tombol putar untuk mulai.
+Tekan lama tetap memilih file untuk operasi salin/pindah/download.
+
+File dibaca langsung dari folder penyimpanan flash disk; tidak perlu di-upload ulang
+atau disalin ke penyimpanan internal. URL `/uploads/<path>` tetap memerlukan login.
+Server mendukung GET/HEAD, satu byte range (206), dan range di luar file (416).
+Download file/folder dan ZIP tetap tersedia.
+
+Foto JPG/PNG/WebP/GIF serta video MP4 (H.264/AAC) adalah pilihan umum. Dukungan
+format lain seperti HEIC, MKV, MOV, AVI, atau codec HEVC bergantung pada browser
+dan perangkat. Server tidak melakukan konversi; jika media tidak bisa ditampilkan,
+gunakan Download atau konversi ke format yang didukung. Setelah mengganti file
+aplikasi, restart server dan muat ulang halaman agar JS/CSS baru ikut terbaca.
 
 ## code
 

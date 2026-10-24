@@ -1,0 +1,35 @@
+/* Penampil media lokal; tetap dapat dipakai tanpa CDN Tailwind. */
+.media-viewer {
+    width: min(1100px, calc(100vw - 24px)); max-width: none;
+    max-height: calc(100dvh - 24px); padding: 0; margin: auto;
+    border: 1px solid #334155; border-radius: 16px;
+    background: #0f172a; color: #f8fafc; box-shadow: 0 24px 80px #0008;
+    overflow: auto;
+}
+.media-viewer::backdrop { background: #020617d9; }
+.media-toolbar, .media-footer { display: flex; align-items: center; gap: 12px; padding: 14px 18px; }
+.media-heading { flex: 1; min-width: 0; }
+.media-heading h2 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.media-detail, .media-position { color: #94a3b8; font-size: 12px; }
+.media-detail { display: block; margin-top: 4px; }
+.media-toolbar button, .media-footer button, .media-footer a {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-height: 40px; padding: 8px 14px; border-radius: 9px;
+    border: 1px solid #475569; background: #1e293b; color: #f8fafc;
+    font: inherit; font-size: 13px; cursor: pointer; text-decoration: none;
+}
+.media-viewer button:focus-visible, .media-viewer a:focus-visible { outline: 2px solid #60a5fa; outline-offset: 3px; }
+.media-viewer button:disabled { opacity: .35; cursor: default; }
+.media-stage { display: flex; justify-content: center; align-items: center; min-height: 180px; background: #020617; }
+.media-stage img, .media-stage video { display: block; max-width: 100%; max-height: 65vh; max-height: 65dvh; object-fit: contain; }
+.media-stage video { width: 100%; }
+.media-status { margin: 0; padding: 10px 18px; font-size: 13px; color: #cbd5e1; overflow-wrap: anywhere; }
+.media-status[hidden] { display: none; }
+.media-status.media-failed { color: #fda4af; }
+.media-footer { flex-wrap: wrap; border-top: 1px solid #334155; }
+.media-footer a { margin-left: auto; background: #2563eb; border-color: #2563eb; }
+@media (max-width: 480px) {
+    .media-toolbar, .media-footer { padding: 12px; gap: 8px; }
+    .media-footer button, .media-footer a { padding: 8px 10px; }
+    .media-heading h2 { font-size: 14px; }
+}

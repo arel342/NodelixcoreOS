@@ -339,7 +339,7 @@ app.post('/api/create-folder', wrap(async (req, res) => {
     res.json({ success: true });
 }));
 
-app.get('/api/download', wrap((req, res) => storage.send(res, req.query.path || '', { zip: req.query.zip === '1' })));
+app.get('/api/download', wrap((req, res) => storage.send(res, req.query.path || '', { zip: req.query.zip === '1', req })));
 
 // Kompres file/folder menjadi .zip di folder yang sama (hasil tersimpan di flash disk)
 app.post('/api/compress', wrap(async (req, res) => {
@@ -348,7 +348,13 @@ app.post('/api/compress', wrap(async (req, res) => {
     const out = await storage.compress((b.dir ? b.dir + '/' : '') + name);
     res.json({ success: true, name: out });
 }));
-app.use('/uploads', wrap((req, res) => storage.send(res, decodeURIComponent(req.path), { inline: true })));
+app.use('/uploads', wrap((req, res) => {
+    if (!['GET', 'HEAD'].includes(req.method)) return res.status(405).set('Allow', 'GET, HEAD').end();
+    let rel;
+    try { rel = decodeURIComponent(req.path); }
+    catch { return res.status(400).json({ error: 'URL file tidak valid.' }); }
+    return storage.send(res, rel, { inline: true, req });
+}));
 
 app.post('/api/upload', (req, res) => {
     upload.single('file')(req, res, err => {
