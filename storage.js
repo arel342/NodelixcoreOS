@@ -365,41 +365,107 @@ async function compress(rel) {
   return r.out.trim().split('\n').pop();
 }
 
-// Download: file di-stream langsung dari flash disk; folder dikompres (zip) dan di-stream
-async function send(res, rel, { inline = false, zip = false } = {}) {
+// Satu byte range cukup untuk seek video. Multi-range/unit lain diabaikan (kirim 200).
+// Angka yang masuk ke shell selalu hasil perhitungan, bukan teks header dari klien.
+function byteRange(header, size) {
+  if (!header || !/^bytes=/i.test(header) || header.includes(',')) return null;
+  const m = /^bytes=(\d*)-(\d*)$/i.exec(header.trim());
+  if (!m || (!m[1] && !m[2]) || size === 0) return false;
+  let start, end;
+  if (!m[1]) {
+    const suffix = Number(m[2]);
+    if (suffix <= 0) return false;
+    start = Math.max(0, size - suffix); end = size - 1;
+  } else {
+    start = Number(m[1]); end = m[2] ? Math.min(Number(m[2]), size - 1) : size - 1;
+  }
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start >= size || end < start) return false;
+  return { start, end, length: end - start + 1 };
+}
+
+// Download/pratinjau langsung dari flash disk; tidak menyalin atau menampung file di RAM.
+async function send(res, rel, { inline = false, zip = false, req = res.req } = {}) {
   await ensure();
   const p = abs(rel);
   if (p === ROOT) throw fail({ code: 4, err: '' });
   // Konten tidak boleh diambil lewat symlink yang keluar dari folder penyimpanan.
   const info = await checked(rel, { mustExist: true });
   const isDir = info.isDirectory, name = path.posix.basename(p);
-  let cmd;
+  if (!isDir && !info.isFile) throw fail({ code: 4, err: '' });
+  const head = req && req.method === 'HEAD';
+  let cmd, expectedBytes = null;
+  res.set({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
   if (isDir || zip) {   // folder selalu di-zip; file di-zip bila diminta (zip=1)
     if (inline) throw fail({ code: 4, err: '' });
     res.attachment(name + '.zip');
+    res.set('Accept-Ranges', 'none');
     cmd = `${G()}cd ${q(path.posix.dirname(p))} && ${zipCmd(q('./' + name))}`;
   } else {
     res.type(path.extname(name) || 'bin');
     // tampil langsung hanya untuk gambar/video/audio (bukan svg/html, supaya tidak menjalankan script)
     if (!inline || !/^(image\/(?!svg)|video\/|audio\/)/.test(res.get('Content-Type') || '')) res.attachment(name);
-    res.set({ 'Content-Length': String(info.size), 'Accept-Ranges': 'none', 'X-Content-Type-Options': 'nosniff' });
-    cmd = `${G()}cat ${q(p)}`;
+    else res.set('Content-Disposition', 'inline');
+    const modified = new Date(info.mtime * 1000).toUTCString();
+    res.set({ 'Accept-Ranges': 'bytes', 'Last-Modified': modified });
+    const headers = (req && req.headers) || {};
+    // HEAD selalu melaporkan seluruh file. If-Range yang sudah berubah mengirim ulang 200.
+    const range = byteRange(head || (headers['if-range'] && headers['if-range'] !== modified) ? '' : headers.range, info.size);
+    if (range === false) {
+      res.status(416).set({ 'Content-Range': `bytes */${info.size}`, 'Content-Length': '0' });
+      return res.end();
+    }
+    expectedBytes = range ? range.length : info.size;
+    res.set('Content-Length', String(expectedBytes));
+    if (range) {
+      res.status(206).set('Content-Range', `bytes ${range.start}-${range.end}/${info.size}`);
+      // dd seek per 64 KiB, lalu buang paling banyak 65535 byte. Kompatibel dengan
+      // dd/tail/head Termux dan Android, tanpa iflag=skip_bytes khusus GNU.
+      const block = 65536, skip = Math.floor(range.start / block), offset = range.start % block;
+      const count = Math.ceil((offset + range.length) / block);
+      cmd = `${G()}dd if=${q(info.real)} bs=${block} skip=${skip} count=${count} 2>/dev/null` +
+        (offset ? ` | tail -c +${offset + 1}` : '') + ` | head -c ${range.length}`;
+    } else cmd = `${G()}cat ${q(info.real)}`;
   }
+  if (res.destroyed) return;
+  if (head || expectedBytes === 0) return res.end();
   const [bin, args] = sh(cmd);
-  const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  let err = '', sent = false;
-  c.stderr.on('data', d => err += d);
-  c.stdout.on('data', () => { sent = true; });
+  const grouped = process.platform !== 'win32';
+  const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], detached: grouped });
+  let err = '', sent = 0, exited = false, failed = false, killTimer;
+  const killTree = signal => {
+    try { if (grouped && c.pid) process.kill(-c.pid, signal); else c.kill(signal); }
+    catch { try { c.kill(signal); } catch { } }
+  };
+  const streamError = e => {
+    if (failed || res.destroyed) return;
+    failed = true;
+    if (!res.headersSent) {
+      for (const h of ['Content-Length', 'Content-Range', 'Content-Disposition', 'Content-Type']) res.removeHeader(h);
+      res.status(500).json({ error: explain({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.dlFail')) });
+    } else res.destroy();
+  };
+  c.stderr.on('data', d => { err = (err + d).slice(-4096); });
+  c.stdout.on('data', d => { sent += d.length; });
+  c.stdout.on('error', streamError);
   c.stdout.pipe(res, { end: false });
-  c.on('error', e => { if (!res.headersSent) res.status(500).json({ error: explain({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }) }); else res.destroy(); });
+  c.on('error', streamError);
   c.on('close', code => {
-    if (code === 0) return res.end();
+    exited = true;
+    clearTimeout(killTimer);
+    if (failed || res.destroyed) return;
+    if (code === 0 && (expectedBytes === null || sent === expectedBytes)) return res.end();
     if (!sent && !res.headersSent) {
-      res.removeHeader('Content-Length'); res.removeHeader('Content-Disposition');
+      for (const h of ['Content-Length', 'Content-Range', 'Content-Disposition', 'Content-Type']) res.removeHeader(h);
       res.status(500).json({ error: explain({ code, err }, T('st.dlFail')) });
     } else res.destroy();
   });
-  res.on('close', () => { if (c.exitCode === null) c.kill(); });
+  // Tutup pemutar/geser video: hentikan juga dd/cat/zip di belakang su.
+  res.once('close', () => {
+    if (exited) return;
+    killTree('SIGTERM');
+    killTimer = setTimeout(() => killTree('SIGKILL'), 1500);
+    killTimer.unref();
+  });
 }
 
 // Simpan stream (mis. file yang dikirim ke bot Telegram) langsung ke flash disk.
