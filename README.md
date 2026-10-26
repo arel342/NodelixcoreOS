@@ -752,7 +752,7 @@ Berikut adalah panduan koneksi dan skema pin hardware mikrokontroler yang terhub
   * Pack 3S ➔ `GPIO 39 / VN` (ADC1) 
 * **Modul Relay (4 Channel)**:
   * Relay 1 & 2 (Paralel) ➔ `GPIO 26`
-  * Relay 3 ➔ `GPIO 27`
+  * Relay 3 ➔ `GPIO 14`
   * Relay 4 ➔ `GPIO 32`
   * Keluaran Pendamping Relay 1 & 2 *(Active HIGH)*:
     * Relay 1 & 2 ON ➔ `GPIO 23` ON (`HIGH`), `GPIO 22` OFF (`LOW`)
