@@ -154,7 +154,7 @@ Tap taps[] = {
 // --- Relay
 #define RELAY_ACTIVE_LOW 1
 struct Relay { const char* name; uint8_t pin; bool on; };
-Relay relays[] = { {"Relay 1 & 2", 26, false}, {"Relay 3", 27, false}, {"Relay 4", 32, false} };
+Relay relays[] = { {"Relay 1 & 2", 26, false}, {"Relay 3", 14, false}, {"Relay 4", 32, false} };
 const uint8_t RELAY_IDS[] = {1, 3, 4};
 const int NR = sizeof(relays) / sizeof(relays[0]);
 
