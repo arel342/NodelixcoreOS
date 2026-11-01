@@ -71,13 +71,18 @@ const requireAuth = (req, res, next) => isAuthed(req) ? next() : res.status(401)
 setInterval(() => { for (const [k, v] of sessions) if (v < Date.now()) sessions.delete(k); }, 600000).unref();
 
 // ================= TELEGRAM =================
-async function notify(text) {
+// Notifikasi Telegram bersama (dipakai ESP32, pintu, OTA, dan pemeriksa update GitHub).
+// opts.parse_mode hanya dikirim bila pemanggil memintanya (default teks biasa), jadi
+// pesan lama yang berisi karakter khusus tetap tampil apa adanya.
+async function notify(text, opts = {}) {
     const tok = env('TELEGRAM_BOT_TOKEN'), chat = env('TELEGRAM_CHAT_ID');
     if (!tok || !chat) return false;
     try {
+        const body = { chat_id: chat, text: String(text == null ? '' : text) };
+        if (opts && opts.parse_mode) body.parse_mode = String(opts.parse_mode);
         const r = await fetch(`https://api.telegram.org/bot${tok}/sendMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: chat, text }), signal: AbortSignal.timeout(8000)
+            body: JSON.stringify(body), signal: AbortSignal.timeout(8000)
         });
         return (await r.json()).ok === true;
     } catch { return false; }
@@ -119,7 +124,7 @@ app.post('/api/settings/lang', (req, res) => {
     res.json({ success: true, message: T('set.saved') });
 });
 // Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/api/ai', '/uploads'], requireAuth);
+app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/api/ai', '/api/update', '/uploads'], requireAuth);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -295,6 +300,24 @@ const telegram = require('./telegram')({
 skillDeps.telegram = telegram;
 if (ai && typeof ai.setTelegram === 'function') ai.setTelegram(telegram);
 
+// ================= UPDATE GITHUB (deteksi + notifikasi, TANPA pemasangan otomatis) =================
+// Tiap UPDATE_CHECK_INTERVAL (default 12 jam) modul ini menjalankan `git fetch origin`,
+// membandingkan commit terpasang dengan origin/main, lalu mengirim SATU notifikasi
+// Telegram per commit baru (lewat notify() di atas, bot yang sama) dan menyiarkan status
+// ke dashboard (WebSocket {type:'UPDATE'} + /api/update/status). `git pull` tidak pernah
+// dijalankan dari sini: pemasangan update tetap tindakan manual administrator.
+function lanBaseUrl() {
+    const ips = Object.values(os.networkInterfaces()).flat()
+        .filter(i => i && i.family === 'IPv4' && !i.internal && !/^169\.254\./.test(i.address))
+        .map(i => i.address);
+    return `http://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
+}
+const updater = require('./updater')({
+    app, env, broadcast, notify, rootDir: __dirname,
+    dashboardUrl: () => lanBaseUrl(),
+    log: console.log
+});
+
 // ================= JADWAL & OTOMASI =================
 const scheduler = require('./scheduler')({
     env, registry, sensorHistory, notify, log: console.log
@@ -313,6 +336,9 @@ wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
     ws.send(JSON.stringify({ type: 'SENSOR', data: esp32.snapshot() }));
     ws.send(JSON.stringify({ type: 'DOOR', data: door.snapshot() }));
+    // Status update tersimpan dikirim ke setiap perangkat yang terhubung — tanpa
+    // menyentuh GitHub, jadi login/muat ulang dashboard tidak memicu pemeriksaan baru.
+    try { ws.send(JSON.stringify({ type: 'UPDATE', data: updater.view() })); } catch { }
     ws.on('close', () => broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size }));
 });
 
@@ -396,6 +422,8 @@ function startDevices() {
     // Jadwal & otomasi dimulai setelah layanan perangkat hidup; kebijakan jadwal
     // terlewat diterapkan di scheduler.bootstrap() (default: dilewati).
     scheduler.start().catch(e => console.error('[Jadwal]', e.message));
+    // Pemeriksa update GitHub: sekali saat mulai (dengan jeda & timeout), lalu tiap 12 jam.
+    try { updater.start(); } catch (e) { console.error('[Update]', e.message); }
 }
 
 // Simpan state dan hentikan proses anak dengan rapi saat server berhenti.
@@ -404,6 +432,7 @@ function shutdown() {
     if (shuttingDown) return;
     shuttingDown = true;
     try { scheduler.stop(); } catch { }
+    try { updater.stop(); } catch { }
     try { executor.killAll('shutdown'); } catch { }
     try { sensorHistory.save(); } catch { }
     try { ai && ai.history && ai.history.save(); } catch { }
