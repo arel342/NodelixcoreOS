@@ -28,6 +28,8 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Mode setup di ESP32 & ESP8266: perangkat menyalakan WiFi sendiri, pengaturan
   (nama WiFi, password WiFi, IP, kunci API) diisi dari halaman web di `192.168.4.1`
 * Update firmware ESP8266 & ESP32 lewat file `.bin` (OTA dari web atau menu Termux)
+* Notifikasi update NodelixcoreOS dari GitHub: cek otomatis tiap 12 jam, notifikasi
+  Telegram sekali per commit, lencana + kartu update di dashboard (pemasangan tetap manual)
 * WebSocket untuk komunikasi real-time
 * Sistem notifikasi
 * Integrasi Telegram
@@ -114,6 +116,7 @@ NodelixcoreOS/
 ├── lang.js
 ├── migrate.js
 ├── update-fw.js
+├── updater.js
 ├── package.json
 ├── package-lock.json
 ├── .env.example
@@ -137,6 +140,7 @@ NodelixcoreOS/
     ├── terminal.js
     ├── upload.js
     ├── ui.js
+    ├── update.js        <- lencana, kartu & popup notifikasi update GitHub
     ├── ai.html          <- halaman chat + tombol konfirmasi AI
     ├── ai.js
     └── i18n.js
@@ -625,6 +629,62 @@ node migrate.js
 ```
 
 Pastikan storage tujuan tersedia dan dapat ditulis sebelum melakukan migrasi.
+
+## Notifikasi Update GitHub
+
+NodelixcoreOS bisa memberi tahu saat ada update baru di
+[github.com/arel342/NodelixcoreOS](https://github.com/arel342/NodelixcoreOS).
+**Pemeriksa ini hanya mendeteksi dan memberi tahu — ia tidak pernah memasang update.**
+Pemasangan tetap tindakan manual administrator (lihat bagian berikutnya).
+
+Cara kerjanya:
+
+1. Tiap **12 jam** (`UPDATE_CHECK_INTERVAL=43200000`) — dan sekali saat server mulai —
+   server menjalankan `git fetch origin`, membaca commit `origin/main`, lalu
+   membandingkannya dengan commit yang sedang terpasang. `git pull` tidak pernah dijalankan,
+   jadi berkas aplikasi tidak berubah saat pemeriksaan.
+2. Kalau commit berbeda, status update disimpan di `data/update-state.json`, **satu**
+   notifikasi Telegram dikirim (bot Telegram yang sama dengan alarm perangkat/pintu),
+   dan dashboard menampilkan lencana + kartu update.
+3. Saat administrator/perangkat login, dashboard membaca status tersimpan itu — tanpa
+   request baru ke GitHub — dan langsung menampilkan notifikasinya.
+
+Notifikasi Telegram berisi commit terpasang, commit terbaru, pesan commit, tautan
+repositori, tautan dashboard (`http://<IP-LAN>:<port>/#update`), dan waktu deteksi.
+Satu notifikasi dikirim per commit; commit yang sama tidak dikirim ulang walau server
+dimulai ulang. Kalau Telegram sedang tidak bisa dihubungi, notifikasi disimpan sebagai
+*tertunda* dan dicoba ulang otomatis. Kalau GitHub tidak tersedia atau membatasi permintaan
+(rate limit), server tetap berjalan normal dan pemeriksaan berikutnya dicoba lagi.
+
+Di dashboard, kartu update bisa dibuka untuk melihat daftar commit terbaru
+(**Lihat perubahan**) dan perintah pemasangan manual yang bisa disalin (**Update sekarang**
+→ salin `git pull origin main && npm install` ke Termux). Tersedia juga tombol
+**Periksa sekarang** yang hanya bisa dipakai admin yang sudah login (dibatasi satu kali
+per 30 detik) — pemeriksaan manual inilah satu-satunya jalan lain untuk menyentuh GitHub.
+
+Pemeriksaan memakai remote `origin` pada folder proyek; `UPDATE_REPO`, `UPDATE_BRANCH`,
+dan `UPDATE_REPO_URL` menentukan cabang yang dibandingkan serta tautan yang ditampilkan
+(untuk repositori ini: `arel342/NodelixcoreOS@main`).
+
+Pengaturan di `.env`:
+
+```env
+UPDATE_CHECK_ENABLED=true
+UPDATE_CHECK_INTERVAL=43200000
+UPDATE_REPO=arel342/NodelixcoreOS
+UPDATE_BRANCH=main
+UPDATE_CHECK_START_DELAY_MS=15000
+UPDATE_NOTIFY_RETRY_MS=900000
+# Kosong = alamat LAN server dipakai otomatis di pesan Telegram
+UPDATE_DASHBOARD_URL=
+# Kosong = teks biasa (aman). Bisa html | markdown | markdownv2
+TELEGRAM_PARSE_MODE=
+```
+
+Catatan keamanan: status update tidak menyimpan token/kunci apa pun, isi pesan commit
+selalu di-escape sesuai parse mode Telegram dan tidak pernah dijalankan sebagai perintah,
+dan tidak ada endpoint yang bisa memasang update dari jarak jauh — hanya route baca status,
+cek manual, dan kirim ulang notifikasi, semuanya di balik login admin.
 
 ## Update Project
 

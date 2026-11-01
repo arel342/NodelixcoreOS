@@ -63,5 +63,7 @@ uploads/
 data/ai-history.json
 data/schedules.json
 data/sensor-history.json
+data/update-state.json
+data/update-state.json.tmp
 data/audit.log
 data/audit.log.*

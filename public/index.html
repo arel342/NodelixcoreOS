@@ -165,13 +165,36 @@
             <!-- Header -->
             <header class="bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
                 <button class="text-gray-600 text-xl md:hidden" onclick="toggleSidebar()"><i class="fa-solid fa-bars"></i></button><span class="hidden md:block"></span>
-                <div class="text-xs font-semibold text-gray-500">
-                    <span data-i18n="hdr.ip">IP Server:</span> <span id="server-ip" class="text-blue-600">-</span>
+                <div class="flex items-center gap-3">
+                    <!-- Lencana update GitHub: muncul hanya saat ada commit baru (status tersimpan di server) -->
+                    <button id="update-badge" onclick="updateOpenDetails()" style="display:none" class="items-center gap-2 text-[11px] font-semibold text-amber-800 bg-amber-100 hover:bg-amber-200 border border-amber-200 px-3 py-1.5 rounded-full transition-colors">
+                        <i class="fa-brands fa-github"></i><span data-i18n="upd.badge">Update tersedia</span>
+                    </button>
+                    <div class="text-xs font-semibold text-gray-500">
+                        <span data-i18n="hdr.ip">IP Server:</span> <span id="server-ip" class="text-blue-600">-</span>
+                    </div>
                 </div>
             </header>
 
             <!-- TAB 1: DASHBOARD ROUTER TOPOLOGY -->
-            <section id="view-dashboard" class="p-6 flex-1 flex items-center justify-center">
+            <section id="view-dashboard" class="p-6 flex-1 flex flex-col">
+                <!-- Kartu notifikasi update GitHub (disembunyikan bila tidak ada update) -->
+                <div id="update-banner" class="hidden w-full max-w-4xl mx-auto mb-4">
+                    <div class="bg-white rounded-2xl border border-amber-200 shadow-sm p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                            <i class="fa-brands fa-github text-lg"></i>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <div class="text-sm font-semibold text-gray-800" data-i18n="upd.bannerTitle">Update GitHub tersedia</div>
+                            <div id="update-banner-meta" class="text-xs text-gray-500 mt-0.5 break-words"></div>
+                        </div>
+                        <div class="flex gap-2 shrink-0">
+                            <button onclick="updateOpenDetails()" class="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-semibold px-4 py-2 rounded-lg transition-colors" data-i18n="upd.viewChanges">Lihat perubahan</button>
+                            <button onclick="updateOpenDetails()" class="bg-orange-500 hover:bg-orange-600 text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-sm transition-colors" data-i18n="upd.now">Update sekarang</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 flex items-center justify-center">
                 <div class="w-full max-w-4xl bg-white/50 p-4 sm:p-8 rounded-3xl border border-gray-200/60 shadow-sm flex justify-center">
                     <svg viewBox="0 0 800 520" class="w-full h-auto select-none max-w-3xl">
                         <g stroke="#1e5a36" stroke-width="2.5" fill="none" stroke-linecap="round" stroke-linejoin="round">
@@ -264,6 +287,7 @@
                             <text id="topo-txt" x="0" y="72" text-anchor="middle" fill="#dc2626" font-size="15" font-weight="600" data-i18n="topo.offline">offline</text>
                         </g>
                     </svg>
+                </div>
                 </div>
             </section>
 
@@ -636,6 +660,62 @@
         </div>
     </div>
 
+    <!-- ================= 7b. POP-UP DETAIL UPDATE GITHUB ================= -->
+    <!-- Hanya menampilkan informasi + perintah pemasangan manual. Server TIDAK memasang
+         update sendiri; administrator menjalankannya di Termux. -->
+    <div id="modal-update" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center z-50 hidden p-4">
+        <div class="bg-white rounded-3xl p-6 sm:p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl relative border border-slate-100">
+            <button onclick="updateCloseDetails()" class="absolute top-5 right-5 text-slate-400 hover:text-slate-600 text-xl focus:outline-none" aria-label="Close">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+
+            <div class="flex items-center gap-2 text-amber-700 mb-1">
+                <i class="fa-brands fa-github"></i>
+                <span class="text-xs font-semibold uppercase tracking-wide" data-i18n="upd.badge">Update tersedia</span>
+            </div>
+            <h3 class="text-xl font-bold text-slate-800 mb-2" data-i18n="upd.title">Update NodelixcoreOS</h3>
+            <p id="upd-modal-sub" class="text-slate-500 text-xs mb-4 leading-relaxed"></p>
+
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-50 rounded-xl p-3">
+                    <div class="text-[11px] font-semibold text-slate-500 uppercase" data-i18n="upd.current">Commit terpasang</div>
+                    <div id="upd-modal-current" class="text-sm font-mono text-slate-800 mt-1 break-all">-</div>
+                </div>
+                <div class="bg-slate-50 rounded-xl p-3">
+                    <div class="text-[11px] font-semibold text-slate-500 uppercase" data-i18n="upd.latest">Commit terbaru</div>
+                    <div id="upd-modal-latest" class="text-sm font-mono text-amber-700 mt-1 break-all">-</div>
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <div class="text-[11px] font-semibold text-slate-500 uppercase mb-1" data-i18n="upd.changes">Perubahan</div>
+                <ul id="upd-modal-list" class="text-xs text-slate-700 space-y-1.5"></ul>
+            </div>
+
+            <div class="text-[11px] text-slate-500 space-y-1 mb-4">
+                <div><span data-i18n="upd.detected">Terdeteksi</span>: <span id="upd-modal-detected">-</span></div>
+                <div><span data-i18n="upd.checked">Terakhir diperiksa</span>: <span id="upd-modal-checked">-</span></div>
+                <div><span data-i18n="upd.notifyTitle">Notifikasi Telegram</span>: <span id="upd-modal-notify">-</span></div>
+                <div><span data-i18n="upd.repo">Repositori</span>: <a id="upd-modal-repo" class="text-blue-600 hover:underline break-all" href="#" target="_blank" rel="noopener">-</a></div>
+            </div>
+
+            <div class="bg-amber-50 border border-amber-200 rounded-xl p-3 mb-4">
+                <div class="text-xs font-semibold text-amber-900" data-i18n="upd.manualTitle">Pemasangan manual</div>
+                <p class="text-[11px] text-amber-800 mt-1 leading-relaxed" data-i18n="upd.manualDesc">NodelixcoreOS tidak memasang update otomatis. Jalankan perintah ini di Termux (folder proyek), lalu buka ulang dashboard:</p>
+                <div class="flex items-center gap-2 mt-2">
+                    <code id="upd-modal-cmd" class="flex-1 bg-white/80 border border-amber-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800 overflow-x-auto whitespace-nowrap">git pull origin main</code>
+                    <button onclick="updateCopyCmd()" class="bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors" data-i18n="upd.copy">Salin</button>
+                </div>
+                <p class="text-[11px] text-amber-800 mt-2" data-i18n="upd.manualNote">Dependency berubah? Jalankan juga npm install, lalu npm start.</p>
+            </div>
+
+            <div class="flex flex-wrap justify-end items-center gap-2">
+                <button type="button" onclick="updateCheckNow()" id="upd-check-btn" class="bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-semibold text-xs px-4 py-2.5 rounded-xl transition-colors" data-i18n="upd.checkNow">Periksa sekarang</button>
+                <button type="button" onclick="updateCloseDetails()" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-6 py-2.5 rounded-xl shadow-md shadow-blue-500/20 transition-all" data-i18n="upd.close">Tutup</button>
+            </div>
+        </div>
+    </div>
+
     <!-- SCRIPT UTAMA -->
     <script>
         // Sesi habis / belum login -> kembali ke halaman login
@@ -713,6 +793,9 @@
             loadMonitor();
             if (window.loadDoor) loadDoor();
             switchTab('dashboard');
+            // Status update tersimpan dibaca sekali setelah login (tanpa request GitHub);
+            // kalau ada update, notifikasi langsung ditampilkan di dashboard.
+            if (window.updateOnLogin) updateOnLogin();
         }
 
         async function handleLogout() {
@@ -758,6 +841,8 @@
                     if (window.renderSystem) renderSystem(data.data);
                 } else if (data.type === 'FW') {
                     if (window.fwEvent) fwEvent(data.data);
+                } else if (data.type === 'UPDATE') {
+                    if (window.updateFromServer) updateFromServer(data.data);
                 }
             };
             ws.onclose = () => { if (loggedIn) setTimeout(connectWebSocket, 2000); };
@@ -1344,5 +1429,6 @@
     <script src="firmware.js"></script>
     <script src="terminal.js"></script>
     <script src="settings.js"></script>
+    <script src="update.js"></script>
 </body>
 </html>

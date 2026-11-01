@@ -52,7 +52,7 @@ const webFiles = [
     'public/index.html', 'public/setup.html',
     'public/monitor.js', 'public/door.js', 'public/system.js', 'public/firmware.js',
     'public/terminal.js', 'public/upload.js', 'public/ui.js', 'public/settings.js',
-    'public/setup.js', 'public/i18n.js', 'public/media.js'
+    'public/setup.js', 'public/i18n.js', 'public/media.js', 'public/update.js'
 ];
 
 test('i18n web: tiga bahasa punya daftar kunci yang sama', () => {
@@ -88,7 +88,7 @@ test('i18n server: semua pesan yang dipakai modul server tersedia', () => {
         assert.deepEqual(beda, [], `pesan ${l} tidak sama dengan id`);
     }
 
-    const modul = ['server.js', 'settings.js', 'setup.js', 'esp32.js', 'door.js', 'telegram.js', 'firmware.js', 'system.js', 'terminal.js', 'storage.js', 'update-fw.js'];
+    const modul = ['server.js', 'settings.js', 'setup.js', 'esp32.js', 'door.js', 'telegram.js', 'firmware.js', 'system.js', 'terminal.js', 'storage.js', 'update-fw.js', 'updater.js'];
     const missing = [];
     for (const f of modul) {
         const src = read(f);
