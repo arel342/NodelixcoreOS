@@ -22,7 +22,12 @@ function saveEnv(key, value) {
     const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
     if (re.test(txt)) txt = txt.replace(re, () => `${key}=${value}`);
     else txt = txt.replace(/\s*$/, '') + (txt.trim() ? '\n' : '') + `${key}=${value}\n`;
-    fs.writeFileSync(ENV_FILE, txt);
+    // Tulis ke berkas sementara lalu rename (atomik), dan batasi hak akses: .env berisi
+    // password admin, token Telegram, serta kunci API Gemini.
+    const tmp = `${ENV_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, txt, { mode: 0o600 });
+    try { fs.chmodSync(tmp, 0o600); } catch { /* filesystem tanpa izin unix */ }
+    fs.renameSync(tmp, ENV_FILE);
     process.env[key] = value;   // langsung dipakai proses yang berjalan
 }
 // Catatan: konfigurasi GEMINI_MODEL milik pengguna TIDAK ditulis ulang otomatis.
@@ -39,36 +44,79 @@ const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
 const T = require('./lang');            // pesan server sesuai bahasa aktif (LANGUAGE di .env)
 
-// ================= SESSION & AUTH =================
-const sessions = new Map(); // sid -> waktu kedaluwarsa
-const TTL = +env('SESSION_TTL_HOURS', 12) * 3600 * 1000;
-const sha = s => crypto.createHash('sha256').update(String(s)).digest();
-const same = (a, b) => crypto.timingSafeEqual(sha(a), sha(b));
+// ================= SESSION & AUTH (terpusat: cookie web + Bearer mobile) =================
+// Semua pemeriksaan sesi ada di auth.js. Cookie `sid` untuk dashboard tetap seperti
+// sebelumnya (di memori), sedangkan sesi mobile memakai token Bearer yang disimpan
+// sebagai hash di data/mobile-sessions.json sehingga tidak hilang saat server restart.
+const authMod = require('./auth');
+const auth = authMod({ env, dataDir: path.join(__dirname, 'data'), log: m => console.log(m) });
+const { createLimiter, same } = authMod;
+const { sidOf, createSession, keepOnly, requireAuth, isAuthed, bearerOf } = auth;
+const loginLimiter = createLimiter({ max: 5, blockMs: 5 * 60 * 1000 });
 
-function isAuthed(req) {
-    const exp = sessions.get(sidOf(req));
-    if (!exp) return false;
-    if (exp < Date.now()) { sessions.delete(sidOf(req)); return false; }
-    return true;
-}
-const sidOf = req => {
-    const m = /(?:^|;\s*)sid=([a-f0-9]+)/.exec(req.headers.cookie || '');
-    return m ? m[1] : '';
-};
-// Buat sesi login baru (dipakai /api/login dan setelah setup awal selesai)
-function createSession(res) {
-    const sid = crypto.randomBytes(32).toString('hex');
-    sessions.set(sid, Date.now() + TTL);
-    res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(TTL / 1000)}`);
-    return sid;
-}
-// Setelah password diganti: sesi lain diputuskan, sesi yang sedang dipakai tetap jalan
-function keepOnly(req) {
-    const keep = sidOf(req);
-    for (const k of [...sessions.keys()]) if (k !== keep) sessions.delete(k);
-}
-const requireAuth = (req, res, next) => isAuthed(req) ? next() : res.status(401).json({ error: T('auth.notLoggedIn') });
-setInterval(() => { for (const [k, v] of sessions) if (v < Date.now()) sessions.delete(k); }, 600000).unref();
+setInterval(auth.flush, 60000).unref();
+
+// ================= HEADER KEAMANAN =================
+// Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
+// pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
+app.disable('x-powered-by');
+// Di balik reverse proxy, aktifkan TRUST_PROXY=true agar rate limit memakai IP klien
+// sebenarnya (X-Forwarded-For). Jangan diaktifkan bila port server terbuka langsung.
+if (String(env('TRUST_PROXY', 'false')).toLowerCase() === 'true') app.set('trust proxy', true);
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+    // Dashboard tidak boleh dibingkai situs lain (anti clickjacking). Bisa dimatikan
+    // lewat ALLOW_IFRAME=true kalau memang perlu ditempel di halaman lain.
+    if (String(env('ALLOW_IFRAME', 'false')).toLowerCase() !== 'true') {
+        res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+        res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+    }
+    // HSTS hanya dikirim kalau permintaan memang datang lewat HTTPS (reverse proxy TLS).
+    if (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') {
+        res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}`);
+    }
+    next();
+});
+
+// Tolak token yang dikirim lewat URL (bocor ke log proxy, riwayat, dsb).
+app.use('/api', (req, res, next) => {
+    const key = auth.tokenInQuery(req);
+    if (!key) return next();
+    res.status(400).json({
+        success: false,
+        error: 'Token sesi tidak boleh dikirim lewat URL. Gunakan header Authorization: Bearer.',
+        message: 'Session tokens must not be sent in the URL.'
+    });
+});
+
+// Proteksi CSRF untuk aksi yang mengubah data: permintaan bercookie `sid` yang membawa
+// header Origin dari host lain ditolak. Aplikasi Android (OkHttp) tidak mengirim Origin,
+// dan dashboard selalu same-origin, jadi keduanya tidak terpengaruh.
+app.use('/api', (req, res, next) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+    // Bearer tidak dikirim otomatis oleh browser, jadi tidak bisa dipicu lintas situs.
+    if (bearerOf(req)) return next();
+    const origin = req.headers.origin;
+    if (!origin) return next();                    // aplikasi native/proxy tanpa Origin
+    let host = '';
+    try { host = new URL(origin).host.toLowerCase(); } catch { host = ''; }
+    const expected = [
+        req.headers['x-forwarded-host'],
+        req.headers.host
+    ].map(v => String(v || '').split(',')[0].trim().toLowerCase()).filter(Boolean);
+    // Origin tambahan yang sengaja dipercaya (reverse proxy yang mengubah Host).
+    const trusted = String(env('TRUSTED_ORIGINS', '')).split(',')
+        .map(o => o.trim().toLowerCase().replace(/\/+$/, '')).filter(Boolean);
+    const normalized = String(origin).trim().toLowerCase().replace(/\/+$/, '');
+    if (!host || expected.includes(host) || trusted.includes(normalized) || trusted.includes(host)) return next();
+    res.status(403).json({
+        success: false,
+        error: 'Permintaan lintas situs ditolak (CSRF).',
+        message: 'Cross-site request rejected (CSRF).'
+    });
+});
 
 // ================= TELEGRAM =================
 // Notifikasi Telegram bersama (dipakai ESP32, pintu, OTA, dan pemeriksa update GitHub).
@@ -89,15 +137,68 @@ async function notify(text, opts = {}) {
 }
 
 // ================= WEBSOCKET =================
+// Autentikasi dilakukan SEBELUM upgrade diterima, memakai auth.js:
+//   - dashboard : cookie `sid`
+//   - mobile    : header `Authorization: Bearer <token>` (tidak pernah lewat query string)
+// Sesi yang dicabut/kedaluwarsa langsung memutus koneksinya (lihat WS_CLOSE_REVOKED).
+const WS_CLOSE_UNAUTHORIZED = 4401;
+const WS_CLOSE_REVOKED = 4403;
 function broadcast(obj) {
     const msg = JSON.stringify(obj);
     wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
 }
 
+// Tutup koneksi milik sesi/perangkat yang baru dicabut.
+function closeSocketsFor(evt) {
+    if (!evt) return;
+    for (const ws of wss.clients) {
+        const a = ws.auth;
+        if (!a) continue;
+        let match = false;
+        if (evt.kind === 'mobile' && a.kind === 'mobile') {
+            match = (evt.tokenHash && a.tokenHash === evt.tokenHash) || (evt.deviceId && a.deviceId === evt.deviceId);
+        } else if (evt.kind === 'web' && a.kind === 'web') {
+            match = evt.sid && a.sid === evt.sid;
+        }
+        if (!match) continue;
+        try { ws.close(WS_CLOSE_REVOKED, 'session revoked'); } catch { }
+        const t = setTimeout(() => { try { ws.terminate(); } catch { } }, 2000);
+        if (t.unref) t.unref();
+    }
+}
+auth.setRevokeHandler(closeSocketsFor);
+
 server.on('upgrade', (req, socket, head) => {
-    if (!isAuthed(req)) { socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n'); return socket.destroy(); }
-    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+    const r = auth.resolve(req);
+    if (!r.ok) {
+        const body = '{"success":false,"message":"Authentication required."}';
+        socket.write(
+            'HTTP/1.1 401 Unauthorized\r\n' +
+            'Connection: close\r\n' +
+            'Content-Type: application/json\r\n' +
+            `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` + body
+        );
+        return socket.destroy();
+    }
+    wss.handleUpgrade(req, socket, head, ws => {
+        ws.auth = r;                       // identitas sesi disimpan per koneksi
+        ws.isAlive = true;
+        wss.emit('connection', ws, req);
+    });
 });
+
+// Periksa ulang sesi tiap 30 detik: token kedaluwarsa / perangkat dicabut -> putus.
+const wsWatch = setInterval(() => {
+    for (const ws of wss.clients) {
+        if (!ws.auth) { try { ws.close(WS_CLOSE_UNAUTHORIZED, 'unauthenticated'); } catch { } continue; }
+        if (!auth.revalidate(ws.auth)) {
+            try { ws.close(WS_CLOSE_REVOKED, 'session expired'); } catch { }
+            const t = setTimeout(() => { try { ws.terminate(); } catch { } }, 1000);
+            if (t.unref) t.unref();
+        }
+    }
+}, 30000);
+if (wsWatch.unref) wsWatch.unref();
 
 // ================= MIDDLEWARE =================
 // ================= SETUP AWAL (wizard di browser) =================
@@ -113,7 +214,7 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.json());
+app.use(express.json({ limit: env('JSON_BODY_LIMIT', '512kb') }));
 // Bahasa aktif boleh dibaca & diganti sebelum login: dipakai halaman login dan halaman
 // setup awal (dua-duanya harus bisa berganti bahasa walau belum ada akun).
 app.get('/api/settings/lang', (req, res) => res.json({ lang: env('LANGUAGE', 'id') }));
@@ -129,30 +230,38 @@ app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/a
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ================= API AUTH =================
-const fails = new Map(); // ip -> { n, until }
-
+// Batas percobaan login: 5 kali salah -> 429 selama 5 menit per IP (perilaku lama).
 app.post('/api/login', (req, res) => {
-    const f = fails.get(req.ip) || { n: 0, until: 0 };
-    if (f.until > Date.now()) return res.status(429).json({ success: false, message: T('auth.tooMany') });
+    const lim = loginLimiter.check(req.ip);
+    if (lim.blocked) return res.status(429).json({ success: false, message: T('auth.tooMany') });
 
     const { username = '', password = '' } = req.body || {};
     const ok = same(username, env('ADMIN_USERNAME', 'admin')) & same(password, env('ADMIN_PASSWORD'));
     if (!ok || !env('ADMIN_PASSWORD')) {
-        f.n++;
-        if (f.n >= 5) { f.n = 0; f.until = Date.now() + 5 * 60 * 1000; }
-        fails.set(req.ip, f);
+        loginLimiter.fail(req.ip);
         return res.status(401).json({ success: false, message: T('auth.wrong') });
     }
-    fails.delete(req.ip);
+    loginLimiter.reset(req.ip);
     createSession(res);
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
-app.get('/api/session', (req, res) => res.json({ authenticated: isAuthed(req) }));
+// Info sesi: `authenticated` tetap seperti sebelumnya; field tambahan hanya informasi.
+app.get('/api/session', (req, res) => {
+    const r = auth.resolve(req);
+    res.json({
+        authenticated: r.ok,
+        method: r.ok ? r.kind : null,
+        deviceId: r.ok && r.deviceId ? r.deviceId : null,
+        expiresAt: r.ok && r.expiresAt ? r.expiresAt : null
+    });
+});
 
 app.post('/api/logout', (req, res) => {
     const sid = sidOf(req);
-    if (sid) sessions.delete(sid);
+    if (sid) auth.destroyWebSession(sid);          // sesi web ini saja (mobile punya endpoint sendiri)
+    const token = bearerOf(req);
+    if (token) auth.revokeToken(token);            // izinkan logout mobile lewat jalur lama juga
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     res.json({ success: true });
 });
@@ -195,7 +304,7 @@ app.post('/api/reset-password', (req, res) => {
 
     saveEnv('ADMIN_PASSWORD', newPassword);
     resetTok = null;
-    sessions.clear();
+    auth.clearWebSessions();   // sesi dashboard lama tidak berlaku lagi
     res.json({ success: true, message: T('reset.ok') });
 });
 
@@ -203,20 +312,18 @@ app.post('/api/reset-password', (req, res) => {
 // Percobaan salah dibatasi 5x per 5 menit per IP, sama seperti /api/login.
 // true = password benar; kalau salah, respons error sudah dikirim dan hasilnya false.
 function verifyDashboardPassword(req, res) {
-    const f = fails.get(req.ip) || { n: 0, until: 0 };
-    if (f.until > Date.now()) {
+    const lim = loginLimiter.check(req.ip);
+    if (lim.blocked) {
         res.status(429).json({ success: false, message: T('auth.tooMany') });
         return false;
     }
     const password = (req.body || {}).password;
     if (typeof password !== 'string' || !env('ADMIN_PASSWORD') || !same(password, env('ADMIN_PASSWORD'))) {
-        f.n++;
-        if (f.n >= 5) { f.n = 0; f.until = Date.now() + 5 * 60 * 1000; }
-        fails.set(req.ip, f);
+        loginLimiter.fail(req.ip);
         res.status(403).json({ success: false, message: T('door.adminPasswordWrong') });
         return false;
     }
-    fails.delete(req.ip);
+    loginLimiter.reset(req.ip);
     return true;
 }
 
@@ -284,9 +391,9 @@ function setWebEnabled(enabled) {
 // ================= AI AGENT =================
 // ai.js adalah implementasi utama. Alias agent.js/ai-agent.js/ai_agent.js/gemini.js
 // hanya me-re-export modul ini.
-const auth = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly };
+const authDeps = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly, resolve: auth.resolve };
 const ai = require('./ai')({
-    app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, executor, auth,
+    app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, executor, auth: authDeps,
     broadcast, notify, registry, confirm, audit, sensorHistory, optional,
     storage, system, locks, diagnostics, deps: skillDeps,
     isWebEnabled: () => webRunning
@@ -327,10 +434,20 @@ skillDeps.scheduler = scheduler;
 // ================= PENGATURAN LEWAT WEB (tab Pengaturan) =================
 // Semua nilai .env penting bisa diubah dari browser: IP/port/kunci API ESP32 & ESP8266,
 // Telegram, batas alarm monitoring, sampai akun admin. Tidak perlu mengedit .env di Termux.
-const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, ai, auth });
+const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, ai, auth: authDeps });
+
+// ================= MOBILE AUTH (ECDSA P-256 + Bearer token) =================
+// Endpoint /api/mobile/* menambah dukungan aplikasi Android tanpa mengubah jalur web:
+// registrasi perangkat (wajib password admin), challenge 32 byte sekali pakai, verifikasi
+// tanda tangan SHA256withECDSA, sesi Bearer yang tahan restart, dan pencabutan perangkat.
+const mobileAuth = require('./mobile-auth')({
+    app, env, auth, dataDir: path.join(__dirname, 'data'),
+    verifyAdminPassword: verifyDashboardPassword,
+    log: m => console.log(m)
+});
 
 // ================= SETUP AWAL (halaman /setup.html) =================
-require('./setup')({ app, saveEnv, settings, esp32, door, telegram, ai, auth, startDevices });
+require('./setup')({ app, saveEnv, settings, esp32, door, telegram, ai, auth: authDeps, startDevices });
 
 wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
@@ -436,9 +553,40 @@ function shutdown() {
     try { executor.killAll('shutdown'); } catch { }
     try { sensorHistory.save(); } catch { }
     try { ai && ai.history && ai.history.save(); } catch { }
+    try { auth.flush(); } catch { }              // sesi mobile (hash) ke disk
+    try { mobileAuth.flush(); } catch { }        // daftar perangkat mobile ke disk
 }
 process.on('exit', shutdown);
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { shutdown(); process.exit(130); });
+
+// ================= PENUTUP ROUTE =================
+// API tak dikenal -> JSON 404 (bukan halaman HTML) supaya aplikasi bisa membedakan
+// "server lama tanpa endpoint" dari "endpoint ada tapi salah metode".
+app.use('/api', (req, res) => res.status(404).json({
+    success: false,
+    error: T('st.notFound') || 'Endpoint tidak ditemukan.',
+    message: 'Not found'
+}));
+
+// Penanganan error terakhir: tidak pernah mengirim stack trace / detail internal ke klien.
+app.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    const status = Number(err && (err.status || err.statusCode)) || 500;
+    const type = err && err.type;
+    let message = 'Permintaan tidak valid.';
+    if (type === 'entity.too.large') message = 'Isi permintaan terlalu besar.';
+    else if (type === 'entity.parse.failed') message = 'JSON tidak valid.';
+    else if (status < 500 && err && typeof err.message === 'string' && err.message) message = err.message;
+    if (status >= 500) console.error('[HTTP]', (err && err.message) || 'internal error');
+    if (String(req.path || '').startsWith('/api/')) {
+        return res.status(status).json({
+            success: false,
+            error: status >= 500 ? 'Kesalahan server internal.' : message,
+            message: status >= 500 ? 'Internal server error.' : message
+        });
+    }
+    res.status(status).type('text/plain').send(status >= 500 ? 'Internal Server Error' : 'Bad Request');
+});
 
 function printBanner() {
     const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)

@@ -31,6 +31,11 @@ Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunik
 * Notifikasi update NodelixcoreOS dari GitHub: cek otomatis tiap 12 jam, notifikasi
   Telegram sekali per commit, lencana + kartu update di dashboard (pemasangan tetap manual)
 * WebSocket untuk komunikasi real-time
+* **Autentikasi aplikasi Android NodelixcoreOS Mobile**: ECDSA P-256 (Android
+  Keystore) + challenge–response, sesi `Authorization: Bearer` yang tahan restart,
+  pendaftaran/pencabutan perangkat dari dashboard atau aplikasi
+* Sesi Bearer juga berlaku untuk seluruh REST API lama dan WebSocket, tanpa
+  mengubah login cookie dashboard
 * Sistem notifikasi
 * Integrasi Telegram
 * AI Agent (Gemini) dengan 27 skill terstruktur: status, relay, pintu/RFID, file, sistem,
@@ -86,6 +91,8 @@ aplikasi, restart server dan muat ulang halaman agar JS/CSS baru ikut terbaca.
 ```text
 NodelixcoreOS/
 ├── server.js
+├── auth.js              <- SATU pemeriksaan sesi: cookie `sid` + Bearer mobile (hash di disk)
+├── mobile-auth.js       <- registrasi perangkat, challenge ECDSA P-256, verify, revoke
 ├── settings.js          <- pengaturan lewat web (ESP32, ESP8266, Telegram, AI, akun, monitoring)
 ├── setup.js             <- setup awal (halaman /setup.html), termasuk langkah kunci API Gemini
 ├── ai.js                <- satu implementasi AI Agent (web + Telegram)
@@ -122,8 +129,16 @@ NodelixcoreOS/
 ├── .env.example
 ├── .gitignore
 ├── README.md
+├── docs/
+│   ├── API.md               <- kontrak REST lengkap (web + mobile)
+│   ├── AUTHENTICATION.md    <- cookie, Bearer, ECDSA, revocation
+│   ├── WEBSOCKET.md         <- handshake, event, kode penutupan
+│   └── UPGRADE.md           <- instalasi/upgrade Termux tanpa kehilangan data
+├── tests/                   <- `npm test` (172 tes, tanpa perangkat keras)
 ├── data/
-│   └── calibration.json
+│   ├── calibration.json
+│   ├── mobile-devices.json  <- kunci publik perangkat Android (runtime, gitignored)
+│   └── mobile-sessions.json <- hash token sesi mobile (runtime, gitignored)
 ├── frimware/
 │   ├── esp32 server sensor.ino
 │   └── esp8266 lock door.ino
@@ -686,9 +701,68 @@ selalu di-escape sesuai parse mode Telegram dan tidak pernah dijalankan sebagai 
 dan tidak ada endpoint yang bisa memasang update dari jarak jauh — hanya route baca status,
 cek manual, dan kirim ulang notifikasi, semuanya di balik login admin.
 
+## Aplikasi Android (NodelixcoreOS Mobile)
+
+Server ini adalah backend resmi untuk aplikasi **NodelixcoreOS Mobile**
+(`com.nodelix.coreos`). Aplikasi memakai dua mode autentikasi:
+
+1. **ECDSA P-256 (utama)** — perangkat mendaftarkan public key Android Keystore-nya
+   dengan password admin sekali saja, lalu login berikutnya cukup biometrik:
+   `challenge` → tanda tangan `SHA256withECDSA` → `verify` → `sessionToken`.
+2. **Cookie `sid` (kompatibilitas)** — bila endpoint mobile dimatikan
+   (`MOBILE_AUTH_ENABLED=false`), server menjawab `404` dan aplikasi otomatis
+   memakai login web biasa.
+
+Endpoint mobile:
+
+```text
+POST   /api/mobile/auth/register
+POST   /api/mobile/auth/challenge
+POST   /api/mobile/auth/verify
+GET    /api/mobile/auth/session
+POST   /api/mobile/auth/refresh
+POST   /api/mobile/auth/logout
+GET    /api/mobile/devices/registered
+DELETE /api/mobile/devices/registered/:deviceId
+```
+
+Sesi mobile disimpan sebagai **hash** di `data/mobile-sessions.json` (mode 600), jadi
+tetap berlaku setelah server/Termux restart, dan dapat dicabut kapan saja dari
+aplikasi atau dashboard. Token hanya dikirim lewat header (`Authorization: Bearer`),
+tidak pernah lewat URL, dan tidak pernah muncul di log.
+
+Kontrak lengkap beserta contoh request/response: [`docs/API.md`](docs/API.md) dan
+[`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md). WebSocket:
+[`docs/WEBSOCKET.md`](docs/WEBSOCKET.md).
+
+Contoh login mobile dengan `curl` (setelah registrasi):
+
+```bash
+# 1. minta challenge
+curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/challenge \
+  -H 'Content-Type: application/json' -d '{"deviceId":"ndlx-..."}'
+
+# 2. tanda tangani "NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonce>|<ts>|<origin>"
+#    dengan kunci ECDSA P-256 (SHA256withECDSA, DER, Base64), lalu:
+curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/verify \
+  -H 'Content-Type: application/json' \
+  -d '{"deviceId":"ndlx-...","challengeId":"chl_...","timestamp":1762041612345,"signatureBase64":"MEUCIQ..."}'
+
+# 3. pakai token pada API lain
+curl -s http://192.168.1.10:3000/api/system -H "Authorization: Bearer $TOKEN"
+```
+
 ## Update Project
 
-Ambil perubahan terbaru:
+Panduan lengkap (backup, rollback, checklist) ada di [`docs/UPGRADE.md`](docs/UPGRADE.md).
+
+Sebelum upgrade, backup `.env` dan folder `data/`:
+
+```bash
+cp -a .env data ~/nodelix-backup/
+```
+
+Ambil perubahan terbaru (manual — server tidak pernah menjalankan `git pull` sendiri):
 
 ```bash
 git pull origin main
@@ -700,11 +774,15 @@ Jika dependency berubah:
 npm install
 ```
 
-Kemudian:
+Uji, lalu jalankan ulang:
 
 ```bash
+npm test          # pemeriksaan sintaks + seluruh tes (tanpa perangkat keras)
 npm start
 ```
+
+`.env` dan data pengguna (`data/`, flash disk) tidak ditimpa oleh update. Server tidak
+menjalankan `git reset --hard` atau menghapus perubahan lokal.
 
 ## Keamanan
 
@@ -728,6 +806,34 @@ Untuk deployment ke internet, pertimbangkan:
 * Aktifkan `TERMINAL_ENABLED=false` bila terminal/AI shell tidak diperlukan.
 * Periksa `data/audit.log` bila mencurigai tindakan yang tidak diinginkan.
 * Tindakan otomatis (jadwal/otomasi) sengaja dibatasi pada operasi non-sensitif.
+
+### Yang sudah diterapkan di server (1.2.0)
+
+* Satu pemeriksaan sesi (`auth.js`) untuk cookie `sid` **dan** Bearer mobile. Bearer
+  tidak dapat melewati aturan apa pun yang berlaku untuk dashboard.
+* Password admin selalu dibandingkan timing-safe; login dan aksi yang meminta password
+  dibatasi 5 percobaan/5 menit per IP. Registrasi/challenge/verify mobile punya batas
+  sendiri per IP dan per perangkat.
+* Token mobile disimpan sebagai hash SHA-256 (`data/mobile-sessions.json`, mode 600,
+  penulisan atomik), dengan masa berlaku dan pencabutan per token/per perangkat.
+* Token di URL ditolak `400`; token tidak pernah ditulis ke log.
+* Header keamanan: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` +
+  `frame-ancestors 'self'` (matikan dengan `ALLOW_IFRAME=true`), HSTS hanya bila lewat
+  HTTPS. CSRF: permintaan non-GET bercookie dengan `Origin` lintas host ditolak.
+* Batas body JSON (`JSON_BODY_LIMIT`) dan batas satu berkas upload (`UPLOAD_MAX_MB`,
+  default 2048 MB) — OTA sudah dibatasi `OTA_MAX_MB` + magic byte `0xE9`.
+* Error handler terakhir tidak pernah mengirim stack trace atau detail internal.
+* Endpoint API tak dikenal menjawab JSON `404` (bukan halaman HTML).
+
+### Batasan yang harus dipahami
+
+* Server **tidak** menyediakan HTTPS sendiri. Jalankan di belakang reverse proxy
+  (Caddy/Nginx) dengan sertifikat lokal untuk `https`/`wss`; untuk LAN tepercaya, HTTP
+  tetap didukung sesuai kebutuhan Termux.
+* Sesi dashboard web tetap di memori: restart server = login ulang di browser.
+  Hanya sesi mobile yang persisten.
+* Server tidak pernah menjalankan `git pull`/`git reset` otomatis; update tetap manual
+  (lihat [`docs/UPGRADE.md`](docs/UPGRADE.md)).
 
 ### Catatan migrasi dari versi sebelumnya
 
@@ -759,14 +865,25 @@ Project ini menggunakan lisensi yang ditentukan pada `package.json`.
 
 ## Status
 
-Project masih dalam pengembangan.
+Versi **1.2.0** — menambahkan autentikasi aplikasi Android (ECDSA P-256 + Bearer)
+tanpa mengubah login web, dashboard, integrasi ESP, maupun penyimpanan pengguna.
 
-Gunakan dan uji pada jaringan lokal sebelum melakukan deployment ke internet.
+Yang sudah diuji otomatis (`npm test`, 172 tes, tanpa perangkat keras):
 
-Yang **belum** diverifikasi di perangkat fisik (lihat juga laporan perubahan):
-pembukaan pintu, enrollment kartu, relay sungguhan, kestabilan flash disk saat dicabut,
-pengiriman file besar ke Telegram, serta perilaku OTA pada jaringan nyata. Semua alur di
-atas sudah diuji dengan mock/unit test, bukan dengan perangkat asli.
+* login web lama + cookie `sid`, rate limit 5 percobaan
+* registrasi perangkat mobile, challenge, verifikasi ECDSA (DER & r||s), replay
+  ditolak, challenge/timestamp kedaluwarsa, origin salah, kunci salah
+* Bearer di seluruh REST API lama (system, settings, files, storage, ESP32, pintu,
+  firmware, update) dan di WebSocket; tanpa kredensial → `401`
+* logout, rotasi token, pencabutan perangkat, koneksi WebSocket diputus `4403`
+* sesi mobile bertahan setelah restart proses (server sungguhan, port acak)
+* file manager (folder/daftar/rename/hapus + traversal ditolak), validasi relay,
+  OTA menolak berkas salah
+
+Yang **belum** diverifikasi di perangkat fisik: pembukaan pintu, enrollment kartu,
+relay sungguhan, kestabilan flash disk saat dicabut, pengiriman file besar ke Telegram,
+serta perilaku OTA pada jaringan nyata. Alur tersebut diuji dengan mock/unit test, bukan
+dengan perangkat asli. Aplikasi Android juga diuji terpisah di repository-nya.
 
 
 

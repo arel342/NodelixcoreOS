@@ -703,7 +703,7 @@
                 <div class="text-xs font-semibold text-amber-900" data-i18n="upd.manualTitle">Pemasangan manual</div>
                 <p class="text-[11px] text-amber-800 mt-1 leading-relaxed" data-i18n="upd.manualDesc">NodelixcoreOS tidak memasang update otomatis. Jalankan perintah ini di Termux (folder proyek), lalu buka ulang dashboard:</p>
                 <div class="flex items-center gap-2 mt-2">
-                    <code id="upd-modal-cmd" class="flex-1 bg-white/80 border border-amber-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800 overflow-x-auto whitespace-nowrap">git pull origin main</code>
+                    <code id="upd-modal-cmd" class="flex-1 bg-white/80 border border-amber-200 rounded-lg px-2 py-1.5 text-[11px] font-mono text-slate-800 overflow-x-auto whitespace-nowrap">npm run backup &amp;&amp; git pull origin main &amp;&amp; npm install</code>
                     <button onclick="updateCopyCmd()" class="bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-[11px] font-semibold px-3 py-1.5 rounded-lg transition-colors" data-i18n="upd.copy">Salin</button>
                 </div>
                 <p class="text-[11px] text-amber-800 mt-2" data-i18n="upd.manualNote">Dependency berubah? Jalankan juga npm install, lalu npm start.</p>

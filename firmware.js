@@ -141,15 +141,15 @@ module.exports = ({ app, broadcast, notify, esp32, door }) => {
         upload.single('file')(req, res, async err => {
             if (err) {
                 const big = err.code === 'LIMIT_FILE_SIZE';
-                return res.status(big ? 413 : 400).json({ error: big ? T('fw.tooBig', { m: N('OTA_MAX_MB', 4) }) : (err.message || T('fw.uploadFail')) });
+                return res.status(big ? 413 : 400).json({ success: false, error: big ? T('fw.tooBig', { m: N('OTA_MAX_MB', 4) }) : (err.message || T('fw.uploadFail')) });
             }
             const device = String((req.body || {}).device || '');
-            if (!isDevice(device)) return res.status(400).json({ error: T('fw.badDevice') });
-            if (!req.file) return res.status(400).json({ error: T('fw.noFile') });
+            if (!isDevice(device)) return res.status(400).json({ success: false, error: T('fw.badDevice') });
+            if (!req.file) return res.status(400).json({ success: false, error: T('fw.noFile') });
             // Peringatan file bukan .bin / bukan gambar firmware ESP
             const chk = checkFile(req.file.originalname, req.file.buffer);
-            if (!chk.ok) return res.status(400).json({ error: chk.message, code: chk.code });
-            if (fwstate.isBusy()) return res.status(409).json({ error: T('fw.busy') });
+            if (!chk.ok) return res.status(400).json({ success: false, error: chk.message, code: chk.code });
+            if (fwstate.isBusy()) return res.status(409).json({ success: false, error: T('fw.busy') });
 
             const dev = devName(device);
             fwstate.set(device, { startedAt: Date.now(), by: 'web', size: req.file.size });
@@ -166,7 +166,7 @@ module.exports = ({ app, broadcast, notify, esp32, door }) => {
                 last = { at: Date.now(), device, ok: false, error: e.message, size: req.file.size };
                 say({ device, phase: 'error', message: T('fw.failMsg', { dev }) + ' ' + e.message });
                 if (tgOn()) notify(T('fw.tgFail', { dev, e: e.message }));
-                res.status(502).json({ success: false, message: e.message, device });
+                res.status(502).json({ success: false, message: e.message, error: e.message, device });
             } finally {
                 fwstate.set(device, null);
             }
