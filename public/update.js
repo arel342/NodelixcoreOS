@@ -14,7 +14,8 @@
 (function () {
     const $ = id => document.getElementById(id);
     const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-    const MANUAL_CMD = 'git pull origin main && npm install';
+    // Back up dulu (.env + data/) supaya konfigurasi & data pengguna tidak hilang.
+    const MANUAL_CMD = 'npm run backup && git pull origin main && npm install';
 
     const st = { data: null, checking: false, loaded: false };
     const shownKey = 'nodelix.upd.shown';       // commit yang toast-nya sudah tampil di perangkat ini

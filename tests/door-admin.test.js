@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const source = name => fs.readFileSync(path.join(root, name), 'utf8');
 const T = require('../lang');
+const { createLimiter } = require('../auth');
 const UID = '11223344';
 const PASSWORD = ' dashboard secret ';
 const response = () => ({ code: 200, status(n) { this.code = n; return this; }, json(j) { this.body = j; return this; } });
@@ -16,12 +17,12 @@ function passwordVerifier() {
     // Exercise the actual callback passed by server.js, including the login attempt limiter.
     const body = source('server.js').split('function verifyDashboardPassword(req, res) {')[1].split('\n}\n')[0];
     const env = { ADMIN_PASSWORD: PASSWORD };
-    const fails = new Map();
+    const limiter = createLimiter({ max: 5, blockMs: 5 * 60 * 1000 });
     const sha = s => crypto.createHash('sha256').update(String(s)).digest();
     const verify = vm.runInNewContext(`(function(req, res) {${body}\n})`, {
-        fails, T, env: k => env[k] || '', same: (a, b) => crypto.timingSafeEqual(sha(a), sha(b))
+        loginLimiter: limiter, T, env: k => env[k] || '', same: (a, b) => crypto.timingSafeEqual(sha(a), sha(b))
     });
-    return { verify, env, fails };
+    return { verify, env, limiter };
 }
 
 function fixture(saved) {
@@ -71,7 +72,7 @@ test('promotion requires the current dashboard password; throttles repeated fail
         assert.notEqual(f.door.snapshot().cards[0].admin, true);
     }
     assert.equal((await f.request('post', '/api/door/cards/admin', { uid: UID, admin: true, password: PASSWORD })).code, 429);
-    f.auth.fails.clear();
+    f.auth.limiter.clear();
     f.auth.env.ADMIN_PASSWORD = 'new-password';
     assert.equal((await f.request('post', '/api/door/cards/admin', { uid: UID, admin: true, password: PASSWORD })).code, 403);
     assert.equal((await f.request('post', '/api/door/cards/admin', { uid: UID, admin: true, password: 'new-password' })).body.success, true);

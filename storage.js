@@ -585,6 +585,13 @@ async function readBuffer(rel, maxBytes = 49 * 1024 * 1024) {
 
 // Storage engine multer: byte upload langsung dialirkan ke flash disk (tanpa file sementara di internal).
 // Ditulis ke "<nama>.part" dulu, baru dipindah ke nama final setelah ukuran cocok.
+// Batas ukuran satu file upload (MB). 0 = tanpa batas. Dicek di dalam stream supaya
+// tidak ada file setengah jadi yang tersimpan saat batas terlampaui.
+const uploadMaxBytes = (() => {
+  const mb = parseFloat(E('UPLOAD_MAX_MB', '2048'));
+  return Number.isFinite(mb) && mb > 0 ? mb * 1024 * 1024 : 0;
+})();
+
 function engine() {
   return {
     _handleFile(req, file, cb) {
@@ -599,7 +606,15 @@ function engine() {
         c.stderr.on('data', d => err += d);
         c.stdin.on('error', () => { });
         c.on('error', e => finish(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
-        file.stream.on('data', d => { bytes += d.length; });
+        file.stream.on('data', d => {
+          bytes += d.length;
+          if (uploadMaxBytes && bytes > uploadMaxBytes) {
+            const e = new Error(T('st.tooBig') || 'File terlalu besar.');
+            e.status = 413;
+            e.code = 'LIMIT_FILE_SIZE';
+            finish(e);
+          }
+        });
         file.stream.on('end', () => { ended = true; });
         file.stream.on('error', e => finish(e));
         file.stream.pipe(c.stdin);
