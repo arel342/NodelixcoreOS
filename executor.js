@@ -124,7 +124,7 @@ module.exports = function createExecutor({ env = (k, d) => (process.env[k] === u
     const jobs = new Map();
     let seq = 0;
 
-    const enabled = () => boolValue(env('TERMINAL_ENABLED', 'true'));
+    const enabled = () => boolValue(env('TERMINAL_ENABLED', 'false'));
 
     function limits() {
         return {
@@ -297,7 +297,7 @@ module.exports = function createExecutor({ env = (k, d) => (process.env[k] === u
 
         job.cancel = () => { if (!job.done) { job.cancelled = true; killJob(job, false, 'cancelled'); } };
         jobs.set(job.id, job);
-        log(`[Executor] ${job.channel}/${job.owner}: ${cmd.replace(/\s+/g, ' ').slice(0, 160)}`);
+        log(`[Executor] ${job.channel}/${job.owner}: command accepted (length=${cmd.length})`);
 
         // Buang job lama yang sudah selesai bila tumpukan memanjang.
         if (jobs.size > MAX_JOBS_KEPT) {

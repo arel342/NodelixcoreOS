@@ -67,11 +67,25 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         if (password !== String(b.confirmPassword == null ? '' : b.confirmPassword))
             return res.status(400).json({ success: false, message: T('setup.pwMismatch') });
 
+        const previousPassword = E('ADMIN_PASSWORD', '');
+        const hadAdminPassword = !!previousPassword;
+        const passwordChanged = hadAdminPassword && password !== previousPassword;
         saveEnv('ADMIN_USERNAME', username);
         saveEnv('ADMIN_PASSWORD', password);
+        if (passwordChanged) {
+            // Jalur setup yang dipakai admin terautentikasi juga dapat mereset password.
+            try {
+                auth.revokeAllMobileSessions('admin_password_reset');
+            } catch (error) {
+                try { saveEnv('ADMIN_PASSWORD', previousPassword); }
+                catch (rollbackError) { console.error('[Security] rollback password gagal setelah revoke sesi gagal:', rollbackError.code || rollbackError.message); }
+                throw error;
+            }
+            auth.keepOnly(req);
+        }
         // Langsung buat sesi login: langkah berikutnya (ESP32/ESP8266/Telegram) jadi
         // terautentikasi, dan halaman setup tertutup untuk orang lain begitu akun ada.
-        auth.createSession(res);
+        auth.createSession(res, { secure: !!req.secure });
         res.json({ success: true, message: T('set.acctOk') });
     });
 
@@ -193,7 +207,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         try { startDevices(); } catch (e) { console.error('[Setup]', e.message); }
         try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[Setup]', e.message); }
         try { await telegram.welcome(); } catch { }
-        auth.createSession(res);                                   // langsung masuk dashboard tanpa login ulang
+        auth.createSession(res, { secure: !!req.secure });                                   // langsung masuk dashboard tanpa login ulang
         res.json({ success: true, message: T('setup.ok'), redirect: '/' });
     });
 

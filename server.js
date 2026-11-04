@@ -35,11 +35,16 @@ function saveEnv(key, value) {
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true });
+const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
-server.requestTimeout = 0;              // unggah/kompres besar ke flash disk tidak dipotong
-server.headersTimeout = 60000;          // header yang menggantung ditutup (cegah soket setengah terbuka)
-server.keepAliveTimeout = 120000;
+// Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
+const boundedMs = (key, fallback, min, max) => {
+    const n = Number(env(key, fallback));
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+};
+server.requestTimeout = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
+server.headersTimeout = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), server.requestTimeout);
+server.keepAliveTimeout = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
 const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
 const T = require('./lang');            // pesan server sesuai bahasa aktif (LANGUAGE di .env)
@@ -60,9 +65,14 @@ setInterval(auth.flush, 60000).unref();
 // Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
 // pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
 app.disable('x-powered-by');
-// Di balik reverse proxy, aktifkan TRUST_PROXY=true agar rate limit memakai IP klien
-// sebenarnya (X-Forwarded-For). Jangan diaktifkan bila port server terbuka langsung.
-if (String(env('TRUST_PROXY', 'false')).toLowerCase() === 'true') app.set('trust proxy', true);
+// Hanya percayai alamat proxy yang dinyatakan eksplisit (IP/CIDR/keyword Express).
+// TRUST_PROXY=true sengaja tidak diterima karena mempercayai semua hop membuka spoofing.
+const trustedProxyEntries = String(env('TRUST_PROXY', '')).split(',').map(v => v.trim()).filter(Boolean);
+if (trustedProxyEntries.length && trustedProxyEntries.some(v => v.toLowerCase() !== 'true' && v.toLowerCase() !== 'false')) {
+    app.set('trust proxy', trustedProxyEntries.filter(v => !['true', 'false'].includes(v.toLowerCase())));
+} else if (trustedProxyEntries.some(v => v.toLowerCase() === 'true')) {
+    console.warn('[Security] TRUST_PROXY=true tidak aman dan diabaikan; gunakan daftar IP/CIDR proxy tepercaya.');
+}
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -74,7 +84,7 @@ app.use((req, res, next) => {
         res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     }
     // HSTS hanya dikirim kalau permintaan memang datang lewat HTTPS (reverse proxy TLS).
-    if (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') {
+    if (req.secure) {
         res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}`);
     }
     next();
@@ -103,14 +113,13 @@ app.use('/api', (req, res, next) => {
     let host = '';
     try { host = new URL(origin).host.toLowerCase(); } catch { host = ''; }
     const expected = [
-        req.headers['x-forwarded-host'],
         req.headers.host
     ].map(v => String(v || '').split(',')[0].trim().toLowerCase()).filter(Boolean);
     // Origin tambahan yang sengaja dipercaya (reverse proxy yang mengubah Host).
     const trusted = String(env('TRUSTED_ORIGINS', '')).split(',')
         .map(o => o.trim().toLowerCase().replace(/\/+$/, '')).filter(Boolean);
     const normalized = String(origin).trim().toLowerCase().replace(/\/+$/, '');
-    if (!host || expected.includes(host) || trusted.includes(normalized) || trusted.includes(host)) return next();
+    if (host && (expected.includes(host) || trusted.includes(normalized) || trusted.includes(host))) return next();
     res.status(403).json({
         success: false,
         error: 'Permintaan lintas situs ditolak (CSRF).',
@@ -188,6 +197,18 @@ server.on('upgrade', (req, socket, head) => {
         } catch { /* klien sudah pergi */ }
         return socket.destroy();
     }
+    const clientIp = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+    const maxWsTotal = boundedMs('WS_MAX_CONNECTIONS', 100, 1, 1000);
+    const maxWsPerIp = boundedMs('WS_MAX_CONNECTIONS_PER_IP', 5, 1, 100);
+    const maxWsPerDevice = boundedMs('WS_MAX_CONNECTIONS_PER_DEVICE', 3, 1, 50);
+    const totalForIp = [...wss.clients].filter(ws => ws.clientIp === clientIp).length;
+    const totalForDevice = r.kind === 'mobile'
+        ? [...wss.clients].filter(ws => ws.auth && ws.auth.kind === 'mobile' && ws.auth.deviceId === r.deviceId).length
+        : 0;
+    if (wss.clients.size >= maxWsTotal || totalForIp >= maxWsPerIp || totalForDevice >= maxWsPerDevice) {
+        try { socket.write('HTTP/1.1 429 Too Many Requests\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+        return socket.destroy();
+    }
     try {
         wss.handleUpgrade(req, socket, head, ws => {
             // Frame yang tidak sah (mis. MASK tidak diset, UTF-8 rusak, payload terlalu
@@ -198,6 +219,7 @@ server.on('upgrade', (req, socket, head) => {
                 console.warn('[WebSocket] koneksi bermasalah:', msg);
             });
             ws.auth = r;                       // identitas sesi disimpan per koneksi
+            ws.clientIp = clientIp;
             ws.isAlive = true;
             wss.emit('connection', ws, req);
         });
@@ -279,7 +301,7 @@ app.post('/api/login', (req, res) => {
         return res.status(401).json({ success: false, message: T('auth.wrong') });
     }
     loginLimiter.reset(req.ip);
-    createSession(res);
+    createSession(res, { secure: !!req.secure });
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
@@ -510,7 +532,29 @@ wss.on('connection', ws => {
 // ================= FILE MANAGER (flash disk lewat su) =================
 // Semua file/folder ada di <STORAGE_DEVICE>/<STORAGE_FOLDER>; satu flash disk terpasang dideteksi otomatis.
 // Folder "upload" dibuat otomatis kalau belum ada; kalau sudah ada, dipakai apa adanya.
-const upload = multer({ storage: storage.engine() });
+const uploadMaxMb = Number(env('UPLOAD_MAX_MB', 2048));
+const uploadLimitBytes = Number.isFinite(uploadMaxMb) && uploadMaxMb > 0 ? Math.floor(uploadMaxMb * 1024 * 1024) : undefined;
+const upload = multer({
+    storage: storage.engine(),
+    limits: { ...(uploadLimitBytes ? { fileSize: uploadLimitBytes } : {}), files: 1, fields: 20, parts: 21, fieldSize: 64 * 1024 }
+});
+const maxConcurrentUploads = boundedMs('UPLOAD_MAX_CONCURRENT', 2, 1, 8);
+let activeUploads = 0;
+function uploadGate(req, res, next) {
+    if (activeUploads >= maxConcurrentUploads) {
+        return res.status(429).json({ error: 'Server sedang menangani upload lain. Coba lagi.' });
+    }
+    activeUploads++;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        activeUploads = Math.max(0, activeUploads - 1);
+    };
+    res.once('finish', release);
+    res.once('close', release);
+    next();
+}
 const wrap = fn => async (req, res) => {
     try { await fn(req, res); }
     catch (e) { if (!res.headersSent) res.status(e.status || 500).json({ error: e.message }); else res.destroy(); }
@@ -547,7 +591,7 @@ app.use('/uploads', wrap((req, res) => {
     return storage.send(res, rel, { inline: true, req });
 }));
 
-app.post('/api/upload', (req, res) => {
+app.post('/api/upload', uploadGate, (req, res) => {
     upload.single('file')(req, res, err => {
         if (err) return res.status(err.status || 500).json({ error: err.message || T('st.uploadFail') });
         if (!req.file) return res.status(400).json({ error: T('st.noFile') });

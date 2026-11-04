@@ -142,14 +142,17 @@ module.exports = function createAuth({
         return JSON.stringify({ ver: 1, sessions: list });
     }
 
-    function flush() {
+    function flush({ throwOnError = false } = {}) {
         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-        if (!mobileDirty) return;
+        if (!mobileDirty) return true;
         try {
             atomicWrite(FILE, serializeMobile());
             mobileDirty = false;
+            return true;
         } catch (e) {
             log(`[Auth] gagal menyimpan sesi mobile: ${e.code || e.message}`);
+            if (throwOnError) throw e;
+            return false;
         }
     }
 
@@ -183,11 +186,12 @@ module.exports = function createAuth({
     }
 
     // ---------- Sesi web ----------
-    function createSession(res) {
+    function createSession(res, { secure = false } = {}) {
         const sid = crypto.randomBytes(32).toString('hex');
         sessions.set(sid, { expiresAt: clock() + webTtlMs, createdAt: clock() });
         if (res && typeof res.setHeader === 'function') {
-            res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(webTtlMs / 1000)}`);
+            const secureAttr = secure ? '; Secure' : '';
+            res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(webTtlMs / 1000)}${secureAttr}`);
         }
         return sid;
     }
@@ -299,19 +303,58 @@ module.exports = function createAuth({
         return n;
     }
 
-    // Perpanjang sesi (rotasi token): token lama dicabut, token baru diterbitkan.
+    // Rotasi refresh atomik: hapus hash lama + masukkan hash baru dalam satu
+    // persistensi, sehingga restart tidak dapat menghidupkan dua token sekaligus.
     function refreshMobileSession(token) {
         const s = mobileSession(token);
         if (!s) return null;
-        const next = issueMobileSession({ deviceId: s.deviceId, username: s.username });
-        revokeToken(token);
-        return next;
+        const oldHash = s.tokenHash;
+        const previous = mobile;
+        const nextToken = crypto.randomBytes(32).toString('hex');
+        const nextHash = sha256hex(nextToken);
+        const now = clock();
+        mobile = Object.assign(Object.create(null), mobile);
+        delete mobile[oldHash];
+        mobile[nextHash] = {
+            deviceId: s.deviceId, username: s.username,
+            createdAt: now, expiresAt: now + mobileTtlMs, lastUsedAt: now
+        };
+        mobileDirty = true;
+        try {
+            flush({ throwOnError: true });
+        } catch (e) {
+            mobile = previous;
+            mobileDirty = true;
+            throw e;
+        }
+        safeRevoke({ kind: 'mobile', deviceId: s.deviceId, tokenHash: oldHash, reason: 'refresh' });
+        return {
+            token: nextToken, tokenHash: nextHash, expiresAt: mobile[nextHash].expiresAt,
+            deviceId: s.deviceId, username: s.username
+        };
     }
 
     function mobileSessionCount(deviceId) {
         let n = 0;
         for (const s of Object.values(mobile)) if (!deviceId || s.deviceId === deviceId) n++;
         return n;
+    }
+
+    // Cabut semua sesi Bearer setelah perubahan/reset password admin.
+    // Persist dilakukan sebelum event WebSocket dikirim dan sebelum pemanggil
+    // menganggap operasi berhasil. Jika disk gagal, token ditolak di memori
+    // dan error diteruskan agar endpoint tidak melaporkan sukses.
+    function revokeAllMobileSessions(reason = 'admin_password_changed') {
+        const dropped = Object.entries(mobile);
+        if (!dropped.length) return 0;
+        for (const [hash] of dropped) delete mobile[hash];
+        mobileDirty = true;
+        flush({ throwOnError: true });
+        for (const [hash, s] of dropped) {
+            safeRevoke({ kind: 'mobile', deviceId: s.deviceId, tokenHash: hash, reason });
+        }
+        log(`[Auth] seluruh sesi mobile dicabut: ${dropped.length} (reason=${String(reason).slice(0, 64)})`);
+        return dropped.length;
     }
 
     function safeRevoke(evt) {
@@ -406,7 +449,7 @@ module.exports = function createAuth({
         sidOf, bearerOf, createSession, webSession, destroyWebSession, clearWebSessions, keepOnly,
         get webTtlMs() { return webTtlMs; },
         // mobile
-        issueMobileSession, revokeToken, revokeDeviceSessions, refreshMobileSession,
+        issueMobileSession, revokeToken, revokeDeviceSessions, revokeAllMobileSessions, refreshMobileSession,
         mobileSessionCount,
         get mobileTtlMs() { return mobileTtlMs; },
         mobileSessionsFile: FILE,

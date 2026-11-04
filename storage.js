@@ -2,6 +2,7 @@
 // Server tetap jalan sebagai user Termux biasa dari penyimpanan internal;
 // hanya perintah file (stat/cat/mv/cp/rm/mkdir) yang dijalankan lewat `su -c`.
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -28,9 +29,22 @@ const sh = cmd => MODE === 'direct' ? ['sh', ['-c', cmd]] : [SU, ['-c', cmd]];
 
 // Path relatif dari UI -> path absolut di flash disk, tidak bisa keluar dari folder upload
 function abs(rel = '') {
-  rel = String(rel);
-  if (rel.includes('\0')) rel = '';
-  const p = path.posix.normalize('/' + rel.replace(/\\/g, '/'));
+  const raw = String(rel == null ? '' : rel);
+  if (raw.includes('\0') || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) {
+    throw Object.assign(new Error('Jalur absolut atau tidak valid ditolak.'), { status: 403, code: 'PATH_DENIED' });
+  }
+  let decoded = raw;
+  for (let i = 0; i < 3; i++) {
+    let next;
+    try { next = decodeURIComponent(decoded); } catch { break; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  const candidate = decoded.replace(/\\/g, '/');
+  if (candidate.includes('\0') || candidate.split('/').some(part => part === '..') || candidate.startsWith('/') || /^[A-Za-z]:/.test(candidate)) {
+    throw Object.assign(new Error('Path traversal ditolak.'), { status: 403, code: 'PATH_DENIED' });
+  }
+  const p = path.posix.normalize('/' + raw.replace(/\\/g, '/'));
   return p === '/' ? ROOT : ROOT + p.replace(/\/$/, '');
 }
 const cleanName = n => {
@@ -273,6 +287,42 @@ async function mkdirPath(rel) {
   return { path: String(rel) };
 }
 
+// Pastikan folder tujuan berada di bawah root. Komponen dibuat satu per satu
+// setelah parent diverifikasi, bukan mkdir -p pada path mentah dari klien.
+async function ensureDirectory(rel = '') {
+  await ensure();
+  const raw = String(rel == null ? '' : rel);
+  abs(raw); // validasi traversal sebelum pemeriksaan filesystem
+  if (!raw) {
+    const current = await inspect('');
+    if (current.ok) {
+      if (!current.inside || !current.isDirectory) throw new PathDenied('Root penyimpanan tidak valid.');
+      return current;
+    }
+    await exec(`${G()}mkdir -p ${q(ROOT)}`, T('st.mkdirFail'));
+    return checked('');
+  }
+  const current = await inspect(raw);
+  if (current.ok) {
+    if (!current.inside) throw new PathDenied('Folder tujuan keluar dari root penyimpanan.');
+    if (!current.isDirectory) throw Object.assign(new Error('Tujuan bukan folder.'), { status: 400 });
+    return current;
+  }
+  const normalized = raw.replace(/\/+$/, '');
+  const parentRel = path.posix.dirname(normalized);
+  const parent = await ensureDirectory(parentRel === '.' ? '' : parentRel);
+  const name = path.posix.basename(normalized);
+  if (!cleanName(name)) throw new PathDenied('Nama folder tidak valid.');
+  const dest = parent.abs + '/' + name;
+  const made = await run(`${G()}mkdir ${q(dest)}`);
+  if (made.code !== 0) {
+    const raced = await inspect(raw);
+    if (!raced.ok || !raced.inside || !raced.isDirectory) throw fail(made, T('st.mkdirFail'));
+    return raced;
+  }
+  return checked(raw);
+}
+
 // Salin / pindahkan satu file atau folder. Tujuan tidak boleh sudah ada (tidak menimpa
 // secara diam-diam) dan folder tidak boleh dipindah ke dalam dirinya sendiri.
 async function transfer(kind, srcRel, dstRel) {
@@ -289,8 +339,8 @@ async function transfer(kind, srcRel, dstRel) {
   // Tujuan belum ada: pastikan folder induknya (yang sudah diselesaikan symlink-nya)
   // tetap berada di dalam root.
   if (!insidePath(parent.real, parent.root)) throw new PathDenied('Folder tujuan keluar dari folder penyimpanan.');
-  const op = kind === 'move' ? 'mv' : 'cp -r';
-  const r = await run(`${G()}[ -e ${q(dstAbs)} ] && exit 17; ${op} ${q(src.abs)} ${q(dstAbs)}`, 30 * 60 * 1000);
+  const op = kind === 'move' ? `mv -n ${q(src.abs)} ${q(dstAbs)} && [ ! -e ${q(src.abs)} ]` : `cp -rn ${q(src.abs)} ${q(dstAbs)}`;
+  const r = await run(`${G()}[ ! -e ${q(dstAbs)} ] || exit 17; ${op}`, 30 * 60 * 1000);
   if (r.code !== 0) throw fail(r, kind === 'move' ? T('st.pasteFail') : T('st.pasteFail'));
   return { from: String(srcRel), to: String(dstRel), kind };
 }
@@ -321,29 +371,59 @@ async function list(rel) {
   })).sort((a, b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
 }
 
-const mkdir = async (rel, name) => { await ensure(); return exec(`${G()}t=${q(abs(rel) + '/' + name)}; [ -e "$t" ] && exit 17; mkdir -p "$t"`, T('st.mkdirFail')); };
+async function mkdir(rel, name) {
+  const n = cleanName(name);
+  if (!n) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+  return mkdirPath([String(rel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/'));
+}
 
-const rename = async (rel, a, b) => {
+async function rename(rel, a, b) {
   await ensure();
-  const d = abs(rel);
-  return exec(`${G()}[ -e ${q(d + '/' + a)} ] || exit 4; [ -e ${q(d + '/' + b)} ] && exit 17; mv ${q(d + '/' + a)} ${q(d + '/' + b)}`, T('st.renameFail'));
-};
+  const fromName = cleanName(a), toName = cleanName(b);
+  if (!fromName || !toName) throw new PathDenied('Nama file tidak valid.');
+  const parent = await checked(rel || '', { mustExist: true });
+  if (!parent.isDirectory) throw Object.assign(new Error('Folder sumber tidak valid.'), { status: 400 });
+  const fromRel = [String(rel || '').replace(/\/+$/, ''), fromName].filter(Boolean).join('/');
+  const toRel = [String(rel || '').replace(/\/+$/, ''), toName].filter(Boolean).join('/');
+  const from = await checked(fromRel, { mustExist: true });
+  const to = await inspect(toRel);
+  if (to.ok) throw new PathExists(T('st.exists'));
+  if (!insidePath(parent.real, parent.root) || !from.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
+  return exec(`${G()}[ ! -e ${q(to.abs)} ] && mv -n ${q(from.abs)} ${q(to.abs)} && [ ! -e ${q(from.abs)} ] || exit 17`, T('st.renameFail'));
+}
 
 async function remove(rel) {
   await ensure();
-  const p = abs(rel);
-  if (p === ROOT) throw Object.assign(new Error(T('st.rootNoDelete')), { status: 400 });
-  return exec(`${G()}[ -e ${q(p)} ] || exit 4; rm -rf ${q(p)}`, T('st.removeFail'), 600000);
+  const info = await checked(rel, { mustExist: true });
+  if (info.abs === ROOT) throw Object.assign(new Error(T('st.rootNoDelete')), { status: 400 });
+  return exec(`${G()}rm -rf ${q(info.abs)}`, T('st.removeFail'), 600000);
 }
 
 async function paste(action, srcRel, dstRel, items) {
   if (!['cut', 'copy'].includes(action) || !Array.isArray(items) || !items.length)
     throw Object.assign(new Error(T('st.pasteEmpty')), { status: 400 });
   await ensure();
-  const src = abs(srcRel), dst = abs(dstRel), op = action === 'cut' ? 'mv -f' : 'cp -r';
-  const cmds = items.map(cleanName).filter(Boolean).map(n => src + '/' + n)
-    .filter(from => from !== dst + '/' + path.posix.basename(from) && !(dst + '/').startsWith(from + '/'))   // tidak ke diri sendiri / ke dalam dirinya
-    .map(from => `[ -e ${q(from)} ] && { ${op} ${q(from)} ${q(dst + '/')} || f=1; }; `);
+  const src = await checked(srcRel || '', { mustExist: true });
+  const dst = await checked(dstRel || '', { mustExist: true });
+  if (!src.isDirectory || !dst.isDirectory) throw Object.assign(new Error('Folder sumber/tujuan tidak valid.'), { status: 400 });
+  const op = action === 'cut' ? 'mv' : 'cp -r';
+  const cmds = [];
+  for (const raw of items) {
+    const n = cleanName(raw);
+    if (!n) continue;
+    const fromRel = [String(srcRel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/');
+    const from = await checked(fromRel, { mustExist: true });
+    const toRel = [String(dstRel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/');
+    const toAbs = dst.abs + '/' + n;
+    if (from.abs === toAbs || toAbs.startsWith(from.abs + '/')) continue;
+    const exists = await inspect(toRel);
+    if (exists.ok) throw new PathExists(T('st.exists'));
+    if (!from.inside || !dst.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
+    const command = action === 'cut'
+      ? `mv -n ${q(from.abs)} ${q(toAbs)} && [ ! -e ${q(from.abs)} ]`
+      : `cp -rn ${q(from.abs)} ${q(toAbs)}`;
+    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${command} || f=1; `);
+  }
   if (cmds.length) await exec(`${G()}f=0; ${cmds.join('')}exit $f`, T('st.pasteFail'), 3600000);
 }
 
@@ -481,16 +561,20 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     await ensure();
     name = cleanName(rawName);
     if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
-    dir = abs(relDir || '');
+    const dirInfo = await ensureDirectory(relDir || '');
+    dir = dirInfo.abs;
     dest = dir + '/' + name;
-    tmp = `${dest}.${Date.now().toString(36)}.part`;
-    const prep = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; mkdir -p ${q(dir)}`);
+    const destRel = [String(relDir || '').replace(/\/+$/, ''), name].filter(Boolean).join('/');
+    const existing = await inspect(destRel);
+    if (existing.ok) throw new PathExists(T('st.exists'));
+    tmp = `${dest}.${crypto.randomBytes(12).toString('hex')}.part`;
+    const prep = await run(`${G()}[ ! -e ${q(tmp)} ]`);
     if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
   } catch (e) {
     destroyStream();
     throw e;
   }
-  const [bin, args] = sh(`${G()}cat > ${q(tmp)}`);
+  const [bin, args] = sh(`${G()}umask 077; set -C; cat > ${q(tmp)}`);
   const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
   let bytes = 0, err = '';
   c.stderr.on('data', d => { err += d; });
@@ -527,7 +611,7 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     if (closeTimer) clearTimeout(closeTimer);
     if (closed === -2) throw fail({ code: -2, err: T('st.timeout') }, T('st.saveFail'));
     if (closed !== 0) throw fail({ code: closed, err }, T('st.saveFail'));
-    const r = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; [ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] && mv ${q(tmp)} ${q(dest)}`, 120000);
+    const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] || exit 5; [ ! -e ${q(dest)} ] || exit 17; mv -n ${q(tmp)} ${q(dest)} && [ ! -e ${q(tmp)} ]`, 120000);
     if (r.code !== 0) throw fail(r, T('st.saveFileFail'));
     return { filename: name, size: bytes };
   } catch (e) {
@@ -595,40 +679,67 @@ const uploadMaxBytes = (() => {
 function engine() {
   return {
     _handleFile(req, file, cb) {
-      ensure().then(() => {
-        const dir = abs(req.query.dir || ''), name = cleanName(fixName(file.originalname));
-        if (!name) return cb(new Error(T('st.badFileName')));
-        const dest = dir + '/' + name, tmp = `${dest}.${Date.now().toString(36)}.part`;
-        const [bin, args] = sh(`${G()}mkdir -p ${q(dir)} && cat > ${q(tmp)}`);
-        const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+      (async () => {
+        await ensure();
+        const relDir = String((req.query && req.query.dir) || '');
+        const dirInfo = await checked(relDir, { mustExist: true });
+        if (!dirInfo.isDirectory) throw Object.assign(new Error('Folder upload tidak valid.'), { status: 400 });
+        const dir = dirInfo.abs;
+        const name = cleanName(fixName(file.originalname));
+        if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+        const dest = dir + '/' + name;
+        const destRel = [relDir.replace(/\/+$/, ''), name].filter(Boolean).join('/');
+        const existing = await inspect(destRel);
+        if (existing.ok) throw new PathExists(T('st.exists'));
+        if (!dirInfo.inside) throw new PathDenied('Folder upload keluar dari root penyimpanan.');
+        const tmp = `${dest}.${crypto.randomBytes(12).toString('hex')}.part`;
+        const [bin, args] = sh(`${G()}umask 077; set -C; cat > ${q(tmp)}`);
+        const child = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
         let bytes = 0, err = '', ended = false, finished = false;
-        const finish = (e, info) => { if (finished) return; finished = true; if (e) { c.kill(); run(`${G()}rm -f ${q(tmp)}`); } cb(e, info); };
-        c.stderr.on('data', d => err += d);
-        c.stdin.on('error', () => { });
-        c.on('error', e => finish(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
+        const killTree = signal => {
+          try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal); else child.kill(signal); }
+          catch { try { child.kill(signal); } catch { } }
+        };
+        const finish = (error, info) => {
+          if (finished) return;
+          finished = true;
+          if (error) {
+            killTree('SIGTERM');
+            run(`${G()}rm -f ${q(tmp)}`);
+          }
+          cb(error, info);
+        };
+        child.stderr.on('data', d => { err = (err + d).slice(-4096); });
+        child.stdin.on('error', () => { });
+        child.on('error', e => finish(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
         file.stream.on('data', d => {
           bytes += d.length;
           if (uploadMaxBytes && bytes > uploadMaxBytes) {
-            const e = new Error(T('st.tooBig') || 'File terlalu besar.');
-            e.status = 413;
-            e.code = 'LIMIT_FILE_SIZE';
-            finish(e);
+            const error = new Error(T('st.tooBig') || 'File terlalu besar.');
+            error.status = 413;
+            error.code = 'LIMIT_FILE_SIZE';
+            file.stream.unpipe(child.stdin);
+            finish(error);
           }
         });
         file.stream.on('end', () => { ended = true; });
-        file.stream.on('error', e => finish(e));
-        file.stream.pipe(c.stdin);
-        req.on('close', () => { if (!req.complete) finish(new Error(T('st.uploadCancel'))); });
-        c.on('close', async code => {
+        file.stream.on('error', finish);
+        req.on('aborted', () => finish(new Error(T('st.uploadCancel'))));
+        file.stream.pipe(child.stdin);
+        child.on('close', async code => {
           if (finished) return;
           if (code !== 0 || !ended) return finish(fail({ code: code || 5, err }, T('st.writeFail')));
-          const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)})" = "${bytes}" ] && mv -f ${q(tmp)} ${q(dest)}`, 120000);
+          const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] || exit 5; [ ! -e ${q(dest)} ] || exit 17; mv -n ${q(tmp)} ${q(dest)} && [ ! -e ${q(tmp)} ]`, 120000);
           r.code === 0 ? finish(null, { path: dest, filename: name, size: bytes }) : finish(fail(r, T('st.saveFileFail')));
         });
-      }).catch(cb);
+      })().catch(cb);
     },
-    _removeFile(req, file, cb) { exec(`${G()}rm -f ${q(file.path)}`, T('st.removeFail')).then(() => cb(null), cb); }
+    _removeFile(req, file, cb) {
+      const rel = path.relative(ROOT, String(file.path || '')).split(path.sep).join('/');
+      checked(rel, { mustExist: true })
+        .then(info => exec(`${G()}rm -f ${q(info.abs)}`, T('st.removeFail')))
+        .then(() => cb(null), cb);
+    }
   };
 }
-
 module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs, saveStream, readBuffer, fileStream, inspect, checked, search, readTextFile, mkdirPath, copyPath, movePath, protectName, insidePath, PathDenied, PathNotFound, PathExists };
