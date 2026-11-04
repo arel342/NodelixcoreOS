@@ -124,7 +124,7 @@ module.exports = function createExecutor({ env = (k, d) => (process.env[k] === u
     const jobs = new Map();
     let seq = 0;
 
-    const enabled = () => boolValue(env('TERMINAL_ENABLED', 'true'));
+    const enabled = () => boolValue(env('TERMINAL_ENABLED', 'false'));
 
     function limits() {
         return {
