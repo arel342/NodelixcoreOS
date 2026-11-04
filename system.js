@@ -81,7 +81,7 @@ module.exports = ({ app, broadcast }) => {
                 aggregate[1] += Number(times.nice) || 0;
                 aggregate[2] += Number(times.sys) || 0;
                 aggregate[3] += Number(times.idle) || 0;
-                aggregate[4] += Number(times.irq) || 0;
+                // IRQ tetap dihitung sebagai waktu sibuk, bukan waktu idle.
             }
             const result = cpuFromCounters(aggregate, prevOsCpu);
             prevOsCpu = result.next;
