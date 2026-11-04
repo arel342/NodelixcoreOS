@@ -193,7 +193,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         try { startDevices(); } catch (e) { console.error('[Setup]', e.message); }
         try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[Setup]', e.message); }
         try { await telegram.welcome(); } catch { }
-        auth.createSession(res);                                   // langsung masuk dashboard tanpa login ulang
+        auth.createSession(res, { secure: !!req.secure });                                   // langsung masuk dashboard tanpa login ulang
         res.json({ success: true, message: T('setup.ok'), redirect: '/' });
     });
 
