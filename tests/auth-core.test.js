@@ -261,3 +261,15 @@ test('mobile: revokeAllMobileSessions persists revocation and is idempotent acro
     assert.equal(restarted.auth.resolve(req({ authorization: `Bearer ${b.token}` })).ok, false);
     restarted.auth.stop();
 });
+
+
+test('web: Secure cookie hanya ditambahkan saat HTTPS aktif', () => {
+    const { auth } = makeAuth();
+    const httpsRes = res();
+    auth.createSession(httpsRes, { secure: true });
+    assert.match(httpsRes.getHeader('set-cookie'), /; Secure$/);
+    const httpRes = res();
+    auth.createSession(httpRes, { secure: false });
+    assert.doesNotMatch(httpRes.getHeader('set-cookie'), /; Secure/);
+    auth.stop();
+});
