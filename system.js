@@ -98,12 +98,15 @@ module.exports = ({ app, broadcast }) => {
         if (!(total > 0)) return null;
         let available = get('MemAvailable');
         if (available == null) {
-            const free = get('MemFree') || 0;
-            const buffers = get('Buffers') || 0;
-            const cached = get('Cached') || 0;
-            const reclaimable = get('SReclaimable') || 0;
+            const free = get('MemFree');
+            const buffers = get('Buffers');
+            const cached = get('Cached');
+            const reclaimable = get('SReclaimable');
             const shared = get('Shmem') || 0;
-            available = Math.min(total, Math.max(0, free + buffers + cached + reclaimable - shared));
+            // Kernel lama dapat tidak menyediakan MemAvailable. Jika seluruh field
+            // estimasi juga tidak ada, serahkan ke os.freemem() agar tidak melaporkan 100%.
+            if (free == null && buffers == null && cached == null && reclaimable == null) return null;
+            available = Math.min(total, Math.max(0, (free || 0) + (buffers || 0) + (cached || 0) + (reclaimable || 0) - shared));
         }
         const used = Math.max(0, Math.min(total, total - available));
         return { total, used, pct: Math.max(0, Math.min(100, used / total * 100)) };
