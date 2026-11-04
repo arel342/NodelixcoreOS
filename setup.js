@@ -71,7 +71,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         saveEnv('ADMIN_PASSWORD', password);
         // Langsung buat sesi login: langkah berikutnya (ESP32/ESP8266/Telegram) jadi
         // terautentikasi, dan halaman setup tertutup untuk orang lain begitu akun ada.
-        auth.createSession(res);
+        auth.createSession(res, { secure: !!req.secure });
         res.json({ success: true, message: T('set.acctOk') });
     });
 
