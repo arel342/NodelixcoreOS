@@ -242,3 +242,22 @@ test('file sesi mobile tidak bisa dibaca orang lain (mode 600) dan tidak menulis
     assert.deepEqual(left, []);
     auth.stop();
 });
+
+
+test('mobile: revokeAllMobileSessions persists revocation and is idempotent across restart', () => {
+    const dataDir = dir('mobile-revoke-all');
+    const first = makeAuth({ dataDir });
+    const a = first.auth.issueMobileSession({ deviceId: 'ndlx-revoke-a' });
+    const b = first.auth.issueMobileSession({ deviceId: 'ndlx-revoke-b' });
+    assert.equal(first.auth.revokeAllMobileSessions('admin_password_changed'), 2);
+    assert.equal(first.auth.revokeAllMobileSessions('admin_password_changed'), 0);
+    assert.equal(first.auth.resolve(req({ authorization: `Bearer ${a.token}` })).ok, false);
+    assert.equal(first.auth.resolve(req({ authorization: `Bearer ${b.token}` })).ok, false);
+    assert.equal(first.events.filter(e => e.kind === 'mobile' && e.reason === 'admin_password_changed').length, 2);
+    first.auth.stop();
+
+    const restarted = makeAuth({ dataDir });
+    assert.equal(restarted.auth.resolve(req({ authorization: `Bearer ${a.token}` })).ok, false);
+    assert.equal(restarted.auth.resolve(req({ authorization: `Bearer ${b.token}` })).ok, false);
+    restarted.auth.stop();
+});
