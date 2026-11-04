@@ -35,7 +35,7 @@ function saveEnv(key, value) {
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true });
+const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
 // Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
 const boundedMs = (key, fallback, min, max) => {
@@ -197,6 +197,18 @@ server.on('upgrade', (req, socket, head) => {
         } catch { /* klien sudah pergi */ }
         return socket.destroy();
     }
+    const clientIp = String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown');
+    const maxWsTotal = boundedMs('WS_MAX_CONNECTIONS', 100, 1, 1000);
+    const maxWsPerIp = boundedMs('WS_MAX_CONNECTIONS_PER_IP', 5, 1, 100);
+    const maxWsPerDevice = boundedMs('WS_MAX_CONNECTIONS_PER_DEVICE', 3, 1, 50);
+    const totalForIp = [...wss.clients].filter(ws => ws.clientIp === clientIp).length;
+    const totalForDevice = r.kind === 'mobile'
+        ? [...wss.clients].filter(ws => ws.auth && ws.auth.kind === 'mobile' && ws.auth.deviceId === r.deviceId).length
+        : 0;
+    if (wss.clients.size >= maxWsTotal || totalForIp >= maxWsPerIp || totalForDevice >= maxWsPerDevice) {
+        try { socket.write('HTTP/1.1 429 Too Many Requests\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+        return socket.destroy();
+    }
     try {
         wss.handleUpgrade(req, socket, head, ws => {
             // Frame yang tidak sah (mis. MASK tidak diset, UTF-8 rusak, payload terlalu
@@ -207,6 +219,7 @@ server.on('upgrade', (req, socket, head) => {
                 console.warn('[WebSocket] koneksi bermasalah:', msg);
             });
             ws.auth = r;                       // identitas sesi disimpan per koneksi
+            ws.clientIp = clientIp;
             ws.isAlive = true;
             wss.emit('connection', ws, req);
         });
