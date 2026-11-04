@@ -674,3 +674,25 @@ test('verify: serverOrigin yang hanya diklaim klien ditolak', async () => {
         assert.equal(result.status, 401, JSON.stringify(result.body));
     } finally { await cfg.close(); }
 });
+
+
+test('websocket: pencabutan semua sesi mobile menutup seluruh koneksi (4403)', async () => {
+    const cfg = await startServer();
+    try {
+        const pairA = newKeyPair();
+        const pairB = newKeyPair();
+        const loginA = await loginWithDevice(cfg, pairA, 'ndlx-ws-revoke-all-a');
+        const loginB = await loginWithDevice(cfg, pairB, 'ndlx-ws-revoke-all-b');
+        const a = await connect(cfg.wsBase, { Authorization: `Bearer ${loginA.verify.body.sessionToken}` });
+        const b = await connect(cfg.wsBase, { Authorization: `Bearer ${loginB.verify.body.sessionToken}` });
+        const closedA = new Promise(resolve => a.ws.on('close', code => resolve(code)));
+        const closedB = new Promise(resolve => b.ws.on('close', code => resolve(code)));
+        assert.equal(cfg.auth.revokeAllMobileSessions('admin_password_changed'), 2);
+        const [codeA, codeB] = await Promise.all([
+            Promise.race([closedA, new Promise(r => setTimeout(() => r('timeout'), 2000))]),
+            Promise.race([closedB, new Promise(r => setTimeout(() => r('timeout'), 2000))])
+        ]);
+        assert.equal(codeA, 4403);
+        assert.equal(codeB, 4403);
+    } finally { await cfg.close(); }
+});
