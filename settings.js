@@ -210,7 +210,10 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, ai, auth }) => {
             if (String(newPassword || '').length < 8 || /[\r\n]/.test(String(newPassword))) return res.status(400).json({ success: false, message: T('set.pwShort') });
             if (newPassword !== confirmPassword) return res.status(400).json({ success: false, message: T('set.pwMismatch') });
             saveEnv('ADMIN_PASSWORD', String(newPassword));
-            auth.keepOnly(req);                                      // sesi lain diputuskan demi keamanan
+            // Password sudah tersimpan; cabut Bearer mobile dan tutup WebSocket terkait.
+            // Jika persistensi sesi gagal, teruskan error dan jangan melaporkan sukses.
+            auth.revokeAllMobileSessions('admin_password_changed');
+            auth.keepOnly(req);                                      // sesi web saat ini tetap aktif
         }
         if (u) saveEnv('ADMIN_USERNAME', u);
         res.json({ success: true, message: T('set.acctOk') });
