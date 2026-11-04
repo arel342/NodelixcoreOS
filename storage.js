@@ -522,16 +522,20 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     await ensure();
     name = cleanName(rawName);
     if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
-    dir = abs(relDir || '');
+    const dirInfo = await ensureDirectory(relDir || '');
+    dir = dirInfo.abs;
     dest = dir + '/' + name;
-    tmp = `${dest}.${Date.now().toString(36)}.part`;
-    const prep = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; mkdir -p ${q(dir)}`);
+    const destRel = [String(relDir || '').replace(/\/+$/, ''), name].filter(Boolean).join('/');
+    const existing = await inspect(destRel);
+    if (existing.ok) throw new PathExists(T('st.exists'));
+    tmp = `${dest}.${crypto.randomBytes(12).toString('hex')}.part`;
+    const prep = await run(`${G()}set -C; : > ${q(tmp)}`);
     if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
   } catch (e) {
     destroyStream();
     throw e;
   }
-  const [bin, args] = sh(`${G()}cat > ${q(tmp)}`);
+  const [bin, args] = sh(`${G()}umask 077; set -C; cat > ${q(tmp)}`);
   const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
   let bytes = 0, err = '';
   c.stderr.on('data', d => { err += d; });
@@ -568,7 +572,7 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     if (closeTimer) clearTimeout(closeTimer);
     if (closed === -2) throw fail({ code: -2, err: T('st.timeout') }, T('st.saveFail'));
     if (closed !== 0) throw fail({ code: closed, err }, T('st.saveFail'));
-    const r = await run(`${G()}[ ! -e ${q(dest)} ] || exit 17; [ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] && mv ${q(tmp)} ${q(dest)}`, 120000);
+    const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] || exit 5; [ ! -e ${q(dest)} ] || exit 17; mv -n ${q(tmp)} ${q(dest)} && [ ! -e ${q(tmp)} ]`, 120000);
     if (r.code !== 0) throw fail(r, T('st.saveFileFail'));
     return { filename: name, size: bytes };
   } catch (e) {
