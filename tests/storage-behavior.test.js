@@ -87,3 +87,11 @@ test('storage: pencarian dibatasi dan mengembalikan jalur relatif', async () => 
     assert.equal(r.results[0].path, 'Cari/laporan-2026.txt');
     assert.equal(r.hasMore, false);
 });
+
+
+test('storage: menolak traversal mentah, encoded, absolute, dan separator Windows', () => {
+    for (const bad of ['../outside', 'a/../../outside', '/etc/passwd', 'C:\\\\Windows', '%2e%2e/outside', '%252e%252e/outside', '..\\\\outside']) {
+        assert.throws(() => storage.abs(bad), e => e.status === 403, bad);
+    }
+    assert.ok(storage.abs('Dokumen/catatan.txt').startsWith(rootDir + path.sep));
+});
