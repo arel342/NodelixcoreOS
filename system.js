@@ -62,7 +62,8 @@ module.exports = ({ app, broadcast }) => {
     function cpuPctFromProc(stat) {
         const line = /^cpu\\s+([\\d\\s]+)/m.exec(String(stat || ''));
         if (!line) return null;
-        const values = line[1].trim().split(/\\s+/).map(Number);
+        // Field guest/guest_nice sudah termasuk dalam user/nice; jangan dihitung dua kali.
+        const values = line[1].trim().split(/\\s+/).map(Number).slice(0, 8);
         if (values.length < 4) return null;
         const result = cpuFromCounters(values, prevProcCpu);
         prevProcCpu = result.next;
