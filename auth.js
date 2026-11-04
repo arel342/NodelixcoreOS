@@ -303,13 +303,35 @@ module.exports = function createAuth({
         return n;
     }
 
-    // Perpanjang sesi (rotasi token): token lama dicabut, token baru diterbitkan.
+    // Rotasi refresh atomik: hapus hash lama + masukkan hash baru dalam satu
+    // persistensi, sehingga restart tidak dapat menghidupkan dua token sekaligus.
     function refreshMobileSession(token) {
         const s = mobileSession(token);
         if (!s) return null;
-        const next = issueMobileSession({ deviceId: s.deviceId, username: s.username });
-        revokeToken(token);
-        return next;
+        const oldHash = s.tokenHash;
+        const previous = mobile;
+        const nextToken = crypto.randomBytes(32).toString('hex');
+        const nextHash = sha256hex(nextToken);
+        const now = clock();
+        mobile = Object.assign(Object.create(null), mobile);
+        delete mobile[oldHash];
+        mobile[nextHash] = {
+            deviceId: s.deviceId, username: s.username,
+            createdAt: now, expiresAt: now + mobileTtlMs, lastUsedAt: now
+        };
+        mobileDirty = true;
+        try {
+            flush({ throwOnError: true });
+        } catch (e) {
+            mobile = previous;
+            mobileDirty = true;
+            throw e;
+        }
+        safeRevoke({ kind: 'mobile', deviceId: s.deviceId, tokenHash: oldHash, reason: 'refresh' });
+        return {
+            token: nextToken, tokenHash: nextHash, expiresAt: mobile[nextHash].expiresAt,
+            deviceId: s.deviceId, username: s.username
+        };
     }
 
     function mobileSessionCount(deviceId) {
