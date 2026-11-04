@@ -28,9 +28,22 @@ const sh = cmd => MODE === 'direct' ? ['sh', ['-c', cmd]] : [SU, ['-c', cmd]];
 
 // Path relatif dari UI -> path absolut di flash disk, tidak bisa keluar dari folder upload
 function abs(rel = '') {
-  rel = String(rel);
-  if (rel.includes('\0')) rel = '';
-  const p = path.posix.normalize('/' + rel.replace(/\\/g, '/'));
+  const raw = String(rel == null ? '' : rel);
+  if (raw.includes('\0') || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) {
+    throw Object.assign(new Error('Jalur absolut atau tidak valid ditolak.'), { status: 403, code: 'PATH_DENIED' });
+  }
+  let decoded = raw;
+  for (let i = 0; i < 3; i++) {
+    let next;
+    try { next = decodeURIComponent(decoded); } catch { break; }
+    if (next === decoded) break;
+    decoded = next;
+  }
+  const candidate = decoded.replace(/\\/g, '/');
+  if (candidate.split('/').some(part => part === '..') || candidate.startsWith('/') || /^[A-Za-z]:/.test(candidate)) {
+    throw Object.assign(new Error('Path traversal ditolak.'), { status: 403, code: 'PATH_DENIED' });
+  }
+  const p = path.posix.normalize('/' + raw.replace(/\\/g, '/'));
   return p === '/' ? ROOT : ROOT + p.replace(/\/$/, '');
 }
 const cleanName = n => {
@@ -321,29 +334,56 @@ async function list(rel) {
   })).sort((a, b) => (b.isDirectory - a.isDirectory) || a.name.localeCompare(b.name));
 }
 
-const mkdir = async (rel, name) => { await ensure(); return exec(`${G()}t=${q(abs(rel) + '/' + name)}; [ -e "$t" ] && exit 17; mkdir -p "$t"`, T('st.mkdirFail')); };
+async function mkdir(rel, name) {
+  const n = cleanName(name);
+  if (!n) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+  return mkdirPath([String(rel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/'));
+}
 
-const rename = async (rel, a, b) => {
+async function rename(rel, a, b) {
   await ensure();
-  const d = abs(rel);
-  return exec(`${G()}[ -e ${q(d + '/' + a)} ] || exit 4; [ -e ${q(d + '/' + b)} ] && exit 17; mv ${q(d + '/' + a)} ${q(d + '/' + b)}`, T('st.renameFail'));
-};
+  const fromName = cleanName(a), toName = cleanName(b);
+  if (!fromName || !toName) throw new PathDenied('Nama file tidak valid.');
+  const parent = await checked(rel || '', { mustExist: true });
+  if (!parent.isDirectory) throw Object.assign(new Error('Folder sumber tidak valid.'), { status: 400 });
+  const fromRel = [String(rel || '').replace(/\/+$/, ''), fromName].filter(Boolean).join('/');
+  const toRel = [String(rel || '').replace(/\/+$/, ''), toName].filter(Boolean).join('/');
+  const from = await checked(fromRel, { mustExist: true });
+  const to = await inspect(toRel);
+  if (to.ok) throw new PathExists(T('st.exists'));
+  if (!insidePath(parent.real, parent.root) || !from.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
+  return exec(`${G()}[ ! -e ${q(to.abs)} ] && mv ${q(from.abs)} ${q(to.abs)}`, T('st.renameFail'));
+}
 
 async function remove(rel) {
   await ensure();
-  const p = abs(rel);
-  if (p === ROOT) throw Object.assign(new Error(T('st.rootNoDelete')), { status: 400 });
-  return exec(`${G()}[ -e ${q(p)} ] || exit 4; rm -rf ${q(p)}`, T('st.removeFail'), 600000);
+  const info = await checked(rel, { mustExist: true });
+  if (info.abs === ROOT) throw Object.assign(new Error(T('st.rootNoDelete')), { status: 400 });
+  return exec(`${G()}rm -rf ${q(info.abs)}`, T('st.removeFail'), 600000);
 }
 
 async function paste(action, srcRel, dstRel, items) {
   if (!['cut', 'copy'].includes(action) || !Array.isArray(items) || !items.length)
     throw Object.assign(new Error(T('st.pasteEmpty')), { status: 400 });
   await ensure();
-  const src = abs(srcRel), dst = abs(dstRel), op = action === 'cut' ? 'mv -f' : 'cp -r';
-  const cmds = items.map(cleanName).filter(Boolean).map(n => src + '/' + n)
-    .filter(from => from !== dst + '/' + path.posix.basename(from) && !(dst + '/').startsWith(from + '/'))   // tidak ke diri sendiri / ke dalam dirinya
-    .map(from => `[ -e ${q(from)} ] && { ${op} ${q(from)} ${q(dst + '/')} || f=1; }; `);
+  const src = await checked(srcRel || '', { mustExist: true });
+  const dst = await checked(dstRel || '', { mustExist: true });
+  if (!src.isDirectory || !dst.isDirectory) throw Object.assign(new Error('Folder sumber/tujuan tidak valid.'), { status: 400 });
+  const op = action === 'cut' ? 'mv' : 'cp -r';
+  const cmds = [];
+  for (const raw of items) {
+    const n = cleanName(raw);
+    if (!n) continue;
+    const fromRel = [String(srcRel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/');
+    const from = await checked(fromRel, { mustExist: true });
+    const toRel = [String(dstRel || '').replace(/\/+$/, ''), n].filter(Boolean).join('/');
+    const toAbs = dst.abs + '/' + n;
+    if (from.abs === toAbs || toAbs.startsWith(from.abs + '/')) continue;
+    const exists = await inspect(toRel);
+    if (exists.ok) throw new PathExists(T('st.exists'));
+    if (!from.inside || !dst.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
+    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${op} ${q(from.abs)} ${q(toAbs)} || f=1; `);
+  }
   if (cmds.length) await exec(`${G()}f=0; ${cmds.join('')}exit $f`, T('st.pasteFail'), 3600000);
 }
 
