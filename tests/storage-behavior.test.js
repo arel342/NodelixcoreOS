@@ -63,11 +63,20 @@ test('storage: symlink ke luar root ditolak untuk baca & salin', async () => {
         assert.ok(/EPERM|EACCES|ENOSYS/.test(e.code || ''), e.message);
         return;
     }
+    fs.symlinkSync(path.join(outside, 'secret.txt'), path.join(rootDir, 'secret-link.txt'), 'file');
+    fs.mkdirSync(path.join(rootDir, 'target'), { recursive: true });
     await assert.rejects(() => storage.checked('escape/secret.txt'), e => e.status === 403);
     await assert.rejects(() => storage.readTextFile('escape/secret.txt'), e => e.status === 403);
     await assert.rejects(() => storage.list('escape'), e => e.status === 403);
     await assert.rejects(() => storage.copyPath('escape/secret.txt', 'salinan.txt'), e => e.status === 403);
+    await assert.rejects(() => storage.movePath('escape/secret.txt', 'pindahan.txt'), e => e.status === 403);
+    await assert.rejects(() => storage.remove('escape'), e => e.status === 403);
+    await assert.rejects(() => storage.rename('', 'secret-link.txt', 'renamed.txt'), e => e.status === 403);
+    await assert.rejects(() => storage.paste('copy', '', 'target', ['secret-link.txt']), e => e.status === 403);
+    await assert.rejects(() => storage.mkdirPath('escape/new-folder'), e => e.status === 403);
     assert.equal(fs.existsSync(path.join(rootDir, 'salinan.txt')), false);
+    assert.equal(fs.existsSync(path.join(rootDir, 'pindahan.txt')), false);
+    assert.equal(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'rahasia di luar root\\n');
 });
 
 test('storage: copy/move tidak menimpa tujuan yang sudah ada', async () => {
