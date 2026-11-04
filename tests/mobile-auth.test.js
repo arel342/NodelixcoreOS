@@ -439,8 +439,9 @@ test('verify: menerima alias field `signature` dan format r||s (P1363)', async (
     } finally { await cfg.close(); }
 });
 
-test('verify: klien boleh mengirim serverOrigin eksplisit (reverse proxy)', async () => {
-    const cfg = await startServer();
+test('verify: reverse proxy origin harus dikonfigurasi di server, bukan dipercaya dari klien', async () => {
+    const origin = 'https://nodelix.example:8443';
+    const cfg = await startServer({ envExtra: { MOBILE_AUTH_SERVER_ORIGIN: origin } });
     try {
         const pair = newKeyPair();
         await register(cfg, pair);
@@ -633,4 +634,43 @@ test('server.js: upgrade WebSocket memakai auth.resolve dan menyimpan identitas 
     assert.ok(!/upgrade[\s\S]{0,300}query\.token/.test(src));
     // Cookie `sid` lama tetap dipakai (requireAuth dari auth.js).
     assert.match(src, /const \{ sidOf, createSession, keepOnly, requireAuth, isAuthed, bearerOf \} = auth;/);
+});
+
+
+test('challenge: X-Forwarded-Host palsu tidak memperluas origin tepercaya', async () => {
+    const cfg = await startServer();
+    try {
+        const pair = newKeyPair();
+        await register(cfg, pair);
+        const ch = await json(`${cfg.base}/api/mobile/auth/challenge`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Forwarded-Host': 'attacker.example',
+                'X-Forwarded-Proto': 'https'
+            },
+            body: JSON.stringify({ deviceId: DEVICE_ID })
+        });
+        assert.equal(ch.status, 200, JSON.stringify(ch.body));
+        assert.ok(!JSON.stringify(ch.body).includes('attacker.example'));
+    } finally { await cfg.close(); }
+});
+
+test('verify: serverOrigin yang hanya diklaim klien ditolak', async () => {
+    const cfg = await startServer();
+    try {
+        const pair = newKeyPair();
+        await register(cfg, pair);
+        const ch = await post(`${cfg.base}/api/mobile/auth/challenge`, { deviceId: DEVICE_ID });
+        const ts = Date.now();
+        const untrusted = 'https://attacker.example';
+        const result = await post(`${cfg.base}/api/mobile/auth/verify`, {
+            deviceId: DEVICE_ID,
+            challengeId: ch.body.challengeId,
+            timestamp: ts,
+            serverOrigin: untrusted,
+            signatureBase64: signDer(pair.privateKey, canonical(DEVICE_ID, ch.body.challengeId, ch.body.nonce, ts, untrusted))
+        });
+        assert.equal(result.status, 401, JSON.stringify(result.body));
+    } finally { await cfg.close(); }
 });
