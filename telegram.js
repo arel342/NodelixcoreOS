@@ -110,6 +110,8 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
     };
 
     let offset = 0, running = false, timer = null;
+    let offsetToken = '';          // token bot pemilik `offset` (update id bot lain tidak berlaku)
+    let pollGen = 0;               // penanda rantai polling aktif (start/stop/restart)
     let welcomed = false;
     let offReason = '';
     let jobSeq = 0;
@@ -911,8 +913,8 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
         }
     }
 
-    async function poll() {
-        if (!running) return;
+    async function poll(gen) {
+        if (!running || gen !== pollGen) return;
         try {
             const updates = await api('getUpdates', { offset, timeout: 25, allowed_updates: ALLOWED_UPDATES }, 35000);
             for (const update of updates) {
@@ -922,9 +924,11 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
                 handleUpdate(update).catch(e => console.error('[Telegram] Update gagal:', e.message));
             }
         } catch (e) {
-            if (running) console.error('[Telegram] Polling gagal:', e.message);
+            if (running && gen === pollGen) console.error('[Telegram] Polling gagal:', e.message);
         }
-        if (running) timer = setTimeout(poll, WAIT_MS);
+        // Rantai lama (start/restart sebelumnya) tidak boleh menjadwalkan putaran baru:
+        // dua polling bersamaan membuat Telegram menolak getUpdates (409 Conflict).
+        if (running && gen === pollGen) timer = setTimeout(() => poll(gen), WAIT_MS);
     }
 
     async function start() {
@@ -936,6 +940,11 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
             return false;
         }
         offReason = '';
+        // Token bot berganti (mis. diisi ulang dari web) -> offset bot lama tidak berlaku.
+        // Selain itu offset dipertahankan supaya update terakhir yang belum di-ack tidak
+        // dieksekusi dua kali saat start()/restart() dipanggil ulang.
+        if (token() !== offsetToken) { offsetToken = token(); offset = 0; }
+        const gen = ++pollGen;          // rantai polling lama langsung tidak berlaku
         if (!chatId()) console.warn('[Telegram] Isi Chat ID Telegram dengan ID chat pribadi admin sebelum memakai bot.');
         try {
             const pending = await api('getUpdates', { timeout: 0, allowed_updates: ALLOWED_UPDATES }, 8000);
@@ -949,12 +958,14 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
         } catch (e) {
             console.error('[Telegram] Gagal menyiapkan polling:', e.message);
         }
+        if (gen !== pollGen) return false;     // start()/stop() lain sudah menggantikan
         running = true;
-        poll();
+        poll(gen);
         return true;
     }
 
     function stop() {
+        pollGen++;                             // hentikan siklus poll() yang masih berjalan
         running = false;
         clearTimeout(timer);
         timer = null;
@@ -964,7 +975,9 @@ module.exports = ({ esp32, door, setWebEnabled, isWebEnabled, ai, locks, optiona
 
     async function restart() {
         stop();
-        offset = 0;
+        // `offset` sengaja TIDAK direset ke 0: start() sudah mengambil update yang belum
+        // dikonfirmasi dan melompati yang lama. Reset ke 0 membuat Telegram mengirim ulang
+        // update terakhir yang belum di-ack sehingga perintah/file bisa dieksekusi dua kali.
         try { return await start(); }
         catch (e) { console.error('[Telegram] Gagal memulai ulang bot:', e.message); return false; }
     }

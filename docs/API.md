@@ -20,6 +20,7 @@ telah diperiksa terhadap kode dan diuji di `tests/`.
 | Autentikasi web | Cookie `sid` (`HttpOnly; SameSite=Lax`) |
 | Autentikasi mobile | `Authorization: Bearer <sessionToken>` |
 | Token di URL | **Ditolak** (`400`) — jangan pernah `?token=...` |
+| Gerbang `/api` | **Deny-by-default**: setiap `/api/*` (dan `/uploads/*`) wajib sesi sah, kecuali endpoint publik yang tercantum di bagian 2 (`login`, `logout`, `session`, `settings/lang`, `setup/*`, `mobile/*`, `request-otp`, `verify-otp`, `reset-password`) |
 | Header keamanan | `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN` (dapat dimatikan dengan `ALLOW_IFRAME=true`), HSTS hanya lewat HTTPS |
 
 ### 1.1 Bentuk respons
@@ -61,7 +62,7 @@ Kesalahan pada jalur mobile:
 
 | Metode & Path | Auth | Keterangan |
 |---|---|---|
-| `GET /api/setup/status` | publik (saat setup) | Status wizard setup |
+| `GET /api/setup/status` | publik | Status wizard setup (rahasia hanya untuk sesi login) |
 | `POST /api/setup/*` | publik (saat setup) | Langkah setup: akun, server, perangkat, Telegram, AI |
 | `GET /api/settings/lang` | publik | `{ "lang": "id" }` |
 | `POST /api/settings/lang` | publik | Ganti bahasa (`id`/`en`/`zh`) |
@@ -344,10 +345,21 @@ yang benar-benar terukur (dengan penanda waktu).
 | `POST /api/door/enroll` | `{ "action": "start"\|"cancel" }` | Daftarkan kartu baru |
 | `POST /api/door/cards/rename` | `{ "uid": "11223344", "name": "Kunci Depan" }` | Ganti nama kartu |
 | `POST /api/door/cards/admin` | `{ "uid", "admin": true, "password": "<password admin>" }` | Hanya untuk menaikkan hak admin |
-| `DELETE /api/door/cards/:uid` | — | Hapus kartu |
+| `DELETE /api/door/cards/:uid` | — | Hapus kartu (respons menyertakan `synced`) |
 
 `POST /api/door/cards/admin` memverifikasi password admin di server (timing-safe,
 5 percobaan/5 menit per IP) dan tidak pernah menyimpan/menyiarkan password itu.
+
+**Konfirmasi perangkat.** `POST /api/door/config`, `POST /api/door/cards/admin`, dan
+`DELETE /api/door/cards/:uid` menyimpan perubahan di server lebih dulu, lalu melaporkan
+`synced: true` hanya kalau ESP8266 menerima dan menggemakan versi konfigurasi yang baru.
+`synced: false` berarti perubahan **belum** berlaku di perangkat (mis. pintu offline) —
+nilai tetap tersimpan dan akan dikirim pada sinkronisasi berikutnya. Field `success`
+tidak berubah (tetap `true`), jadi klien lama tidak terpengaruh.
+
+Perintah `POST /api/door/open`, `/close`, dan `/enroll` hanya dijawab `success: true`
+setelah perangkat membalas `{"ok":true}`. Balasan `{"ok":false}` atau perangkat tidak
+merespons dijawab **502** dengan `success: false` dan pesan yang menjelaskan sebabnya.
 
 ---
 

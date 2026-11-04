@@ -110,7 +110,16 @@ module.exports = ({ app, broadcast }) => {
     }
 
     let timer = null;
-    function loop() { sample().catch(() => { }).finally(() => { timer = setTimeout(loop, POLL_MS); }); }
+    let gen = 0;                   // penanda rantai sampling aktif (start/stop)
+    function loop() {
+        const my = gen;
+        sample().catch(() => { }).finally(() => {
+            // Siklus yang sudah digantikan start()/stop() tidak menjadwalkan putaran baru,
+            // jadi start() yang dipanggil dua kali tidak menggandakan broadcast SYSTEM.
+            if (my !== gen) return;
+            timer = setTimeout(loop, POLL_MS);
+        });
+    }
 
     // Sudah dilindungi login di server.js
     app.get('/api/system', (req, res) => res.json({ now: last, history: hist }));
@@ -124,8 +133,8 @@ module.exports = ({ app, broadcast }) => {
     }
 
     return {
-        start() { loop(); },
-        stop() { clearTimeout(timer); },
+        start() { stop(); loop(); },
+        stop() { gen++; clearTimeout(timer); timer = null; },
         getStatus,
         history: () => hist.slice(),
         snapshot: () => lastFull

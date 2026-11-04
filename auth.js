@@ -85,6 +85,12 @@ module.exports = function createAuth({
     const mobileTtlMs = Math.max(1, N('MOBILE_SESSION_TTL_HOURS', 720)) * HOUR;
     const FILE = path.join(dataDir, 'mobile-sessions.json');
     const LAST_USED_GRANULARITY = 60 * 1000;   // batasi penulisan berkas saat token dipakai
+    // Batas sesi per perangkat. Setiap login biometrik menerbitkan token baru; tanpa
+    // batas, sesi lama yang tidak dipakai lagi menumpuk sampai TTL 720 jam.
+    const maxSessionsPerDevice = () => {
+        const v = Math.floor(N('MOBILE_MAX_SESSIONS_PER_DEVICE', 10));
+        return v >= 1 ? Math.min(v, 100) : 10;
+    };
 
     // ---------- Sesi web (cookie sid) ----------
     const sessions = new Map();          // sid -> { expiresAt, createdAt }
@@ -226,9 +232,26 @@ module.exports = function createAuth({
         const now = clock();
         const ttl = Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : mobileTtlMs;
         mobile[hash] = { deviceId, username, createdAt: now, expiresAt: now + ttl, lastUsedAt: now };
+        // Sesi paling lama milik perangkat yang sama dipensiunkan bila melewati batas
+        // (sesi baru tetap yang dipakai aplikasi; token lama tidak menggantung selamanya).
+        pruneDeviceSessions(deviceId);
         mobileDirty = true;
         flush();   // sesi baru harus langsung tahan restart
         return { token, tokenHash: hash, expiresAt: mobile[hash].expiresAt, deviceId, username };
+    }
+
+    function pruneDeviceSessions(deviceId) {
+        const limit = maxSessionsPerDevice();
+        const mine = Object.entries(mobile).filter(([, s]) => s.deviceId === deviceId);
+        if (mine.length <= limit) return 0;
+        mine.sort((a, b) => (a[1].createdAt || 0) - (b[1].createdAt || 0));
+        let dropped = 0;
+        for (const [hash, s] of mine.slice(0, mine.length - limit)) {
+            delete mobile[hash];
+            dropped++;
+            safeRevoke({ kind: 'mobile', deviceId: s.deviceId, tokenHash: hash, reason: 'session_limit' });
+        }
+        return dropped;
     }
 
     function mobileSession(token) {

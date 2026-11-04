@@ -117,6 +117,8 @@ function emptyState() {
         installedCommit: '',
         latestCommit: '',
         updateAvailable: false,
+        aheadCount: 0,          // commit lokal yang belum ada di origin (divergen)
+        behindCount: 0,         // commit origin yang belum terpasang (dasar updateAvailable)
         detectedAt: null,
         lastCheckedAt: null,
         lastCheckOkAt: null,
@@ -200,6 +202,8 @@ function createUpdater({
                 : [];
             s.commits = Array.isArray(s.commits) ? s.commits.map(normCommit).filter(Boolean).slice(0, MAX_COMMITS) : [];
             s.updateAvailable = s.updateAvailable === true;
+            s.aheadCount = Number.isFinite(+s.aheadCount) && +s.aheadCount > 0 ? Math.min(+s.aheadCount, 100000) : 0;
+            s.behindCount = Number.isFinite(+s.behindCount) && +s.behindCount > 0 ? Math.min(+s.behindCount, 100000) : 0;
             s.pendingNotify = s.pendingNotify === true;
             s.notifyStatus = String(s.notifyStatus || 'none');
             s.notifyAttempts = Number.isFinite(+s.notifyAttempts) ? Math.max(0, +s.notifyAttempts) : 0;
@@ -248,6 +252,8 @@ function createUpdater({
             latestCommit: state.latestCommit || '',
             latestShort: shortHash(state.latestCommit),
             updateAvailable: !!state.updateAvailable && !!state.latestCommit,
+            aheadCount: state.aheadCount || 0,
+            behindCount: state.behindCount || 0,
             detectedAt: state.detectedAt || null,
             lastCheckedAt: state.lastCheckedAt || null,
             lastCheckOkAt: state.lastCheckOkAt || null,
@@ -469,13 +475,28 @@ function createUpdater({
         }
         latest = latest.toLowerCase();
 
+        // Perbandingan versi memakai hitungan commit, bukan sekadar "hash berbeda":
+        // repo yang punya commit lokal lebih baru dari origin BUKAN update tersedia.
+        let ahead = 0, behind = 0;
+        try {
+            const counts = String(await git(['rev-list', '--left-right', '--count', `${installed}...origin/${branch}`], gitTimeoutMs())).trim();
+            const m = /^(\d+)\s+(\d+)$/.exec(counts);
+            if (m) { ahead = Number(m[1]) || 0; behind = Number(m[2]) || 0; }
+            else behind = installed === latest ? 0 : 1;
+        } catch {
+            // git lama / ref tidak lengkap: jatuh ke perbandingan commit seperti sebelumnya.
+            behind = installed === latest ? 0 : 1;
+        }
+
         const before = { available: state.updateAvailable, latest: state.latestCommit };
         state.repo = repo;
         state.branch = branch;
         state.repoUrl = repoUrl();
         state.installedCommit = installed;
         state.latestCommit = latest;
-        state.updateAvailable = installed !== latest;
+        state.aheadCount = ahead;
+        state.behindCount = behind;
+        state.updateAvailable = behind > 0;
         state.lastCheckedAt = now();
         state.lastCheckOkAt = state.lastCheckedAt;
         state.lastCheckError = '';

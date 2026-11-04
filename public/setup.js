@@ -81,11 +81,20 @@ function wzSummary() {
     el.innerHTML =
         row(t('wz.sumDone'), dash || key('')) +
         row('ESP32 · IP', key(s.esp32.ip) + (s.esp32.ip ? `:${s.esp32.port}` : '')) +
-        row('ESP32 · API', s.esp32.apiKey ? '••••••' : t('wz.notFilled')) +
+        row('ESP32 · API', (s.esp32.apiKey || s.esp32.hasKey) ? '••••••' : t('wz.notFilled')) +
         row('ESP8266 · IP', key(s.door.ip) + (s.door.ip ? `:${s.door.port}` : '')) +
-        row('ESP8266 · API', s.door.apiKey ? '••••••' : t('wz.notFilled')) +
-        row('Telegram', s.telegram.token ? (s.telegram.chatId ? t('cfg.on') : t('wz.notFilled')) : t('cfg.off')) +
+        row('ESP8266 · API', (s.door.apiKey || s.door.hasKey) ? '••••••' : t('wz.notFilled')) +
+        row('Telegram', (s.telegram.token || s.telegram.hasToken) ? (s.telegram.chatId ? t('cfg.on') : t('wz.notFilled')) : t('cfg.off')) +
         row(t('wz.sumAi'), (s.ai && s.ai.hasKey) ? '••••••' + ((s.ai.enabled === false) ? ' · ' + t('cfg.off') : '') : t('wz.notFilled'));
+}
+
+// Kolom rahasia: kalau server hanya mengirim penanda `hasKey` (belum login), kolom
+// dibiarkan kosong dengan placeholder "sudah tersimpan" dan artinya TIDAK diubah.
+function wzKeyState(id, group) {
+    const el = $(id);
+    if (!el) return;
+    const stored = !!(group && (group.apiKey || group.hasKey || group.hasToken));
+    el.placeholder = (stored && !el.value) ? t('wz.keyKept') : '';
 }
 
 const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -118,14 +127,20 @@ async function wzLoad() {
         `<span>http://${esc(ip)}:${esc(String(s.server.port))}</span><button type="button" onclick="wzCopyText('http://${esc(ip)}:${esc(String(s.server.port))}')">${esc(t('wz.copy'))}</button>`).join('');
     $('in-e32-ip').value = s.esp32.ip || '';
     $('in-e32-port').value = s.esp32.port || 80;
+    // Server tidak mengirim kunci tersimpan ke pengunjung yang belum login (lihat
+    // setup.js di server). `hasKey` dipakai supaya kunci baru TIDAK dibuat untuk
+    // menggantikan kunci yang sudah ada, dan kolom dibiarkan kosong = tidak diubah.
     $('in-e32-key').value = s.esp32.apiKey || '';
-    if (!s.esp32.apiKey) wzGen('in-e32-key');
+    wzKeyState('in-e32-key', s.esp32);
+    if (!s.esp32.apiKey && !s.esp32.hasKey) wzGen('in-e32-key');
     $('in-d-ip').value = s.door.ip || '';
     $('in-d-port').value = s.door.port || 80;
     $('in-d-key').value = s.door.apiKey || '';
-    if (!s.door.apiKey) wzGen('in-d-key');
+    wzKeyState('in-d-key', s.door);
+    if (!s.door.apiKey && !s.door.hasKey) wzGen('in-d-key');
     $('in-tg-alerts').checked = s.telegram.alerts !== false;
     $('in-tg-token').value = s.telegram.token || '';
+    wzKeyState('in-tg-token', { hasKey: s.telegram.hasToken });
     $('in-tg-chat').value = s.telegram.chatId || '';
     const ai = s.ai || {};
     $('in-ai-enabled').checked = ai.enabled !== false;

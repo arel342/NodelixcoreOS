@@ -424,8 +424,13 @@ function fakeRes() {
 
 test('update: route cek manual & notifikasi hanya tersedia untuk sesi login (didaftarkan di server.js)', () => {
     const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
-    const authLine = server.split('\n').find(l => l.trim().startsWith('app.use([') && l.includes('requireAuth'));
-    assert.ok(authLine && authLine.includes('/api/update'), 'semua route /api/update harus di balik requireAuth');
+    // server.js memakai gerbang deny-by-default: semua /api wajib login kecuali yang
+    // tercantum di PUBLIC_API. /api/update tidak boleh ada di daftar publik itu.
+    const gate = server.match(/const PUBLIC_API = \[([\s\S]*?)\];/);
+    assert.ok(gate, 'server.js harus punya daftar PUBLIC_API (deny-by-default untuk /api)');
+    assert.ok(!/api\\?\/update/.test(gate[1]), 'route /api/update tidak boleh masuk daftar publik');
+    assert.ok(/PUBLIC_API\.some\(rx => rx\.test\(p\)\)[\s\S]{0,80}return requireAuth\(req, res, next\);/.test(server),
+        'endpoint /api di luar PUBLIC_API harus melewati requireAuth');
     assert.ok(!/\/api\/update\/(install|apply|pull)/.test(server + fs.readFileSync(path.join(root, 'updater.js'), 'utf8')),
         'tidak boleh ada route yang memasang update');
 });

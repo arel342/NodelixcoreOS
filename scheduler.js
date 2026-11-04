@@ -379,7 +379,21 @@ module.exports = function createScheduler({
             for (const rec of schedules.slice()) {
                 if (rec.status !== 'active' || !rec.nextRun) continue;
                 if (rec.nextRun > t) continue;
-                await runSchedule(rec);
+                const lateBy = t - rec.nextRun;
+                // Jadwal yang TERLALU terlambat juga bisa terjadi saat server tetap hidup
+                // (Termux di-suspend di latar belakang, event loop macet, jam berubah).
+                // Sebelumnya tick() selalu menjalankan apa pun yang sudah jatuh tempo,
+                // jadi kebijakan SCHEDULE_MISSED_POLICY hanya berlaku saat bootstrap.
+                if (lateBy > maxLateMs()) {
+                    rec.missed = (rec.missed || 0) + 1;
+                    rec.lastMissedAt = t;
+                    const policy = missedPolicy();
+                    log(`[Jadwal] ${rec.id} terlewat ${Math.round(lateBy / 1000)} dtk saat server berjalan; kebijakan ${policy}.`);
+                    if (policy === 'run-once') await runSchedule(rec);
+                    else await announce(`ℹ️ Jadwal ${rec.id} (${rec.skill}) terlewat ${Math.round(lateBy / 1000)} dtk dan DILEWATI sesuai kebijakan ${policy}.`);
+                } else {
+                    await runSchedule(rec);
+                }
                 if (rec.repeat === 'daily') {
                     rec.nextRun = nextDailyAfter(rec.time, t);
                 } else {
