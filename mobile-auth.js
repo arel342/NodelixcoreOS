@@ -48,8 +48,13 @@ const HOUR = 3600 * 1000;
 function normOrigin(v) {
     const s = String(v == null ? '' : v).trim().replace(/\/+$/, '').toLowerCase();
     if (!s || s.includes('|')) return '';
-    if (!/^[a-z][a-z0-9+.-]*:\/\/[^\s]+$/.test(s)) return '';
-    return s;
+    try {
+        const u = new URL(s);
+        if (!['http:', 'https:'].includes(u.protocol) || !u.hostname ||
+            u.username || u.password || u.pathname !== '/' || u.search || u.hash) return '';
+        // URL.origin memberi normalisasi host/port dan menolak authority ambigu.
+        return u.origin.toLowerCase();
+    } catch { return ''; }
 }
 
 // Pesan kanonik — urutan & pemisah HARUS sama dengan Android (SignatureManager).
@@ -239,11 +244,12 @@ module.exports = function createMobileAuth({
             const n = normOrigin(o);
             if (n) out.add(n);
         }
-        const hostRaw = (req.headers['x-forwarded-host'] || req.headers.host || '');
-        const host = String(hostRaw).split(',')[0].trim();
+        // Header X-Forwarded-* tidak pernah menjadi sumber kepercayaan di sini:
+        // nilainya dapat dipalsukan oleh klien kecuali proxy benar-benar dikonfigurasi.
+        // Untuk TLS offload gunakan MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
+        const host = String((req.headers && req.headers.host) || '').split(',')[0].trim();
         if (host) {
-            const proto = String(req.headers['x-forwarded-proto'] || (req.socket && req.socket.encrypted ? 'https' : 'http'))
-                .split(',')[0].trim().toLowerCase() || 'http';
+            const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
             for (const p of new Set([proto, 'http', 'https'])) {
                 const n = normOrigin(`${p}://${host}`);
                 if (n) out.add(n);
