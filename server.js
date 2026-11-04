@@ -519,7 +519,29 @@ wss.on('connection', ws => {
 // ================= FILE MANAGER (flash disk lewat su) =================
 // Semua file/folder ada di <STORAGE_DEVICE>/<STORAGE_FOLDER>; satu flash disk terpasang dideteksi otomatis.
 // Folder "upload" dibuat otomatis kalau belum ada; kalau sudah ada, dipakai apa adanya.
-const upload = multer({ storage: storage.engine() });
+const uploadMaxMb = Number(env('UPLOAD_MAX_MB', 2048));
+const uploadLimitBytes = Number.isFinite(uploadMaxMb) && uploadMaxMb > 0 ? Math.floor(uploadMaxMb * 1024 * 1024) : undefined;
+const upload = multer({
+    storage: storage.engine(),
+    limits: { ...(uploadLimitBytes ? { fileSize: uploadLimitBytes } : {}), files: 1, fields: 20, parts: 21, fieldSize: 64 * 1024 }
+});
+const maxConcurrentUploads = boundedMs('UPLOAD_MAX_CONCURRENT', 2, 1, 8);
+let activeUploads = 0;
+function uploadGate(req, res, next) {
+    if (activeUploads >= maxConcurrentUploads) {
+        return res.status(429).json({ error: 'Server sedang menangani upload lain. Coba lagi.' });
+    }
+    activeUploads++;
+    let released = false;
+    const release = () => {
+        if (released) return;
+        released = true;
+        activeUploads = Math.max(0, activeUploads - 1);
+    };
+    res.once('finish', release);
+    res.once('close', release);
+    next();
+}
 const wrap = fn => async (req, res) => {
     try { await fn(req, res); }
     catch (e) { if (!res.headersSent) res.status(e.status || 500).json({ error: e.message }); else res.destroy(); }
@@ -556,7 +578,7 @@ app.use('/uploads', wrap((req, res) => {
     return storage.send(res, rel, { inline: true, req });
 }));
 
-app.post('/api/upload', (req, res) => {
+app.post('/api/upload', uploadGate, (req, res) => {
     upload.single('file')(req, res, err => {
         if (err) return res.status(err.status || 500).json({ error: err.message || T('st.uploadFail') });
         if (!req.file) return res.status(400).json({ error: T('st.noFile') });
