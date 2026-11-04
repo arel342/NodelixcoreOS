@@ -419,10 +419,10 @@ async function paste(action, srcRel, dstRel, items) {
     const exists = await inspect(toRel);
     if (exists.ok) throw new PathExists(T('st.exists'));
     if (!from.inside || !dst.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
-    const action = action === 'cut'
+    const command = action === 'cut'
       ? `mv -n ${q(from.abs)} ${q(toAbs)} && [ ! -e ${q(from.abs)} ]`
       : `cp -rn ${q(from.abs)} ${q(toAbs)}`;
-    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${action} || f=1; `);
+    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${command} || f=1; `);
   }
   if (cmds.length) await exec(`${G()}f=0; ${cmds.join('')}exit $f`, T('st.pasteFail'), 3600000);
 }
