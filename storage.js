@@ -2,6 +2,7 @@
 // Server tetap jalan sebagai user Termux biasa dari penyimpanan internal;
 // hanya perintah file (stat/cat/mv/cp/rm/mkdir) yang dijalankan lewat `su -c`.
 const { spawn } = require('child_process');
+const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
@@ -40,7 +41,7 @@ function abs(rel = '') {
     decoded = next;
   }
   const candidate = decoded.replace(/\\/g, '/');
-  if (candidate.split('/').some(part => part === '..') || candidate.startsWith('/') || /^[A-Za-z]:/.test(candidate)) {
+  if (candidate.includes('\0') || candidate.split('/').some(part => part === '..') || candidate.startsWith('/') || /^[A-Za-z]:/.test(candidate)) {
     throw Object.assign(new Error('Path traversal ditolak.'), { status: 403, code: 'PATH_DENIED' });
   }
   const p = path.posix.normalize('/' + raw.replace(/\\/g, '/'));
@@ -635,40 +636,67 @@ const uploadMaxBytes = (() => {
 function engine() {
   return {
     _handleFile(req, file, cb) {
-      ensure().then(() => {
-        const dir = abs(req.query.dir || ''), name = cleanName(fixName(file.originalname));
-        if (!name) return cb(new Error(T('st.badFileName')));
-        const dest = dir + '/' + name, tmp = `${dest}.${Date.now().toString(36)}.part`;
-        const [bin, args] = sh(`${G()}mkdir -p ${q(dir)} && cat > ${q(tmp)}`);
-        const c = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'] });
+      (async () => {
+        await ensure();
+        const relDir = String((req.query && req.query.dir) || '');
+        const dirInfo = await checked(relDir, { mustExist: true });
+        if (!dirInfo.isDirectory) throw Object.assign(new Error('Folder upload tidak valid.'), { status: 400 });
+        const dir = dirInfo.abs;
+        const name = cleanName(fixName(file.originalname));
+        if (!name) throw Object.assign(new Error(T('st.badFileName')), { status: 400 });
+        const dest = dir + '/' + name;
+        const destRel = [relDir.replace(/\/+$/, ''), name].filter(Boolean).join('/');
+        const existing = await inspect(destRel);
+        if (existing.ok) throw new PathExists(T('st.exists'));
+        if (!dirInfo.inside) throw new PathDenied('Folder upload keluar dari root penyimpanan.');
+        const tmp = `${dest}.${crypto.randomBytes(12).toString('hex')}.part`;
+        const [bin, args] = sh(`${G()}umask 077; set -C; cat > ${q(tmp)}`);
+        const child = spawn(bin, args, { stdio: ['pipe', 'ignore', 'pipe'], detached: process.platform !== 'win32' });
         let bytes = 0, err = '', ended = false, finished = false;
-        const finish = (e, info) => { if (finished) return; finished = true; if (e) { c.kill(); run(`${G()}rm -f ${q(tmp)}`); } cb(e, info); };
-        c.stderr.on('data', d => err += d);
-        c.stdin.on('error', () => { });
-        c.on('error', e => finish(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
+        const killTree = signal => {
+          try { if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal); else child.kill(signal); }
+          catch { try { child.kill(signal); } catch { } }
+        };
+        const finish = (error, info) => {
+          if (finished) return;
+          finished = true;
+          if (error) {
+            killTree('SIGTERM');
+            run(`${G()}rm -f ${q(tmp)}`);
+          }
+          cb(error, info);
+        };
+        child.stderr.on('data', d => { err = (err + d).slice(-4096); });
+        child.stdin.on('error', () => { });
+        child.on('error', e => finish(fail({ code: -1, err: e.code === 'ENOENT' ? 'ENOENT' : e.message }, T('st.saveFail'))));
         file.stream.on('data', d => {
           bytes += d.length;
           if (uploadMaxBytes && bytes > uploadMaxBytes) {
-            const e = new Error(T('st.tooBig') || 'File terlalu besar.');
-            e.status = 413;
-            e.code = 'LIMIT_FILE_SIZE';
-            finish(e);
+            const error = new Error(T('st.tooBig') || 'File terlalu besar.');
+            error.status = 413;
+            error.code = 'LIMIT_FILE_SIZE';
+            file.stream.unpipe(child.stdin);
+            finish(error);
           }
         });
         file.stream.on('end', () => { ended = true; });
-        file.stream.on('error', e => finish(e));
-        file.stream.pipe(c.stdin);
-        req.on('close', () => { if (!req.complete) finish(new Error(T('st.uploadCancel'))); });
-        c.on('close', async code => {
+        file.stream.on('error', finish);
+        req.on('aborted', () => finish(new Error(T('st.uploadCancel'))));
+        file.stream.pipe(child.stdin);
+        child.on('close', async code => {
           if (finished) return;
           if (code !== 0 || !ended) return finish(fail({ code: code || 5, err }, T('st.writeFail')));
-          const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)})" = "${bytes}" ] && mv -f ${q(tmp)} ${q(dest)}`, 120000);
+          const r = await run(`${G()}[ "$(stat -c %s ${q(tmp)} 2>/dev/null)" = "${bytes}" ] || exit 5; [ ! -e ${q(dest)} ] || exit 17; mv -n ${q(tmp)} ${q(dest)} && [ ! -e ${q(tmp)} ]`, 120000);
           r.code === 0 ? finish(null, { path: dest, filename: name, size: bytes }) : finish(fail(r, T('st.saveFileFail')));
         });
-      }).catch(cb);
+      })().catch(cb);
     },
-    _removeFile(req, file, cb) { exec(`${G()}rm -f ${q(file.path)}`, T('st.removeFail')).then(() => cb(null), cb); }
+    _removeFile(req, file, cb) {
+      const rel = path.relative(ROOT, String(file.path || '')).split(path.sep).join('/');
+      checked(rel, { mustExist: true })
+        .then(info => exec(`${G()}rm -f ${q(info.abs)}`, T('st.removeFail')))
+        .then(() => cb(null), cb);
+    }
   };
 }
-
 module.exports = { get ROOT() { return ROOT; }, DEVICE, MODE, SU, compress, status, list, mkdir, rename, remove, paste, send, engine, importFrom, cleanName, abs, saveStream, readBuffer, fileStream, inspect, checked, search, readTextFile, mkdirPath, copyPath, movePath, protectName, insidePath, PathDenied, PathNotFound, PathExists };
