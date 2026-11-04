@@ -186,11 +186,12 @@ module.exports = function createAuth({
     }
 
     // ---------- Sesi web ----------
-    function createSession(res) {
+    function createSession(res, { secure = false } = {}) {
         const sid = crypto.randomBytes(32).toString('hex');
         sessions.set(sid, { expiresAt: clock() + webTtlMs, createdAt: clock() });
         if (res && typeof res.setHeader === 'function') {
-            res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(webTtlMs / 1000)}`);
+            const secureAttr = secure ? '; Secure' : '';
+            res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.floor(webTtlMs / 1000)}${secureAttr}`);
         }
         return sid;
     }
