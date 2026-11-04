@@ -39,6 +39,7 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
     };
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, zeroing = null, timer = null, relaySeq = 0;
+    let gen = 0;                           // penanda rantai polling aktif (start/stop)
     let lastError = '', lastErrorAt = 0;   // error terakhir (dipakai diagnose_device)
     const hist = [], cnt = {}, act = {}, lastMsg = {};
     const DEFAULT_RELAYS = [
@@ -67,13 +68,30 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
         return r.json();
     }
 
+    // Faktor kalibrasi untuk satu tap. Nilai yang hilang/rusak (mis. data/calibration.json
+    // disunting manual) TIDAK boleh membuat pembacaan sensor gagal: dipakai faktor netral.
+    function tapCal(id) {
+        const c = cal && cal.taps ? cal.taps[id] : null;
+        return {
+            gain: c && Number.isFinite(c.gain) ? c.gain : 1,
+            offset: c && Number.isFinite(c.offset) ? c.offset : 0
+        };
+    }
+
     // ---------- Hitung nilai terkoreksi ----------
+    // Payload perangkat divalidasi per bagian: bagian yang tidak masuk akal diabaikan,
+    // bukan membuat seluruh pembacaan dianggap gagal (perangkat tetap online).
     function compute() {
-        if (!raw || !Array.isArray(raw.battery) || !raw.current) return null;
+        if (!raw || typeof raw !== 'object') return null;
         const t = {};
-        raw.battery.forEach(b => {
-            if (b.en) { const c = cal.taps[b.id]; t[b.id] = { raw: b.v, v: b.v * c.gain + c.offset }; }
-        });
+        if (Array.isArray(raw.battery)) {
+            raw.battery.forEach(b => {
+                if (!b || typeof b !== 'object' || !b.en) return;
+                if (!Number.isFinite(b.v)) return;              // tegangan tidak valid -> abaikan tap ini
+                const c = tapCal(b.id);
+                t[b.id] = { raw: b.v, v: b.v * c.gain + c.offset };
+            });
+        }
 
         let cells = null, mode = 'pack';
         if (t.s1 && t.s2 && t.s3) { cells = [t.s1.v, t.s2.v - t.s1.v, t.s3.v - t.s2.v]; mode = 'cells'; }   // 3 tap terpasang: tegangan per sel
@@ -95,11 +113,18 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
             };
         }
 
-        // Arus: kurangi noise (kuadrat), kalikan gain, lalu dead-band
+        // Arus: kurangi noise (kuadrat), kalikan gain, lalu dead-band.
+        // Tanpa pembacaan arus yang sah (irms bukan angka), current = null dan bagian
+        // arus dilewati — bukan NaN yang bocor ke dashboard.
         const c = raw.current;
-        let i = Math.sqrt(Math.max(0, c.irms ** 2 - cal.i.floor ** 2)) * cal.i.gain;
-        if (i < N('I_DEADBAND_A', 0.05)) i = 0;
-        const current = { a: i, peak: c.ipk * cal.i.gain, clip: !!c.clip, va: i * N('AC_VOLTAGE_NOMINAL', 220) * N('AC_POWER_FACTOR', 1) };
+        let current = null;
+        if (c && typeof c === 'object' && Number.isFinite(c.irms)) {
+            const floor = cal && cal.i && Number.isFinite(cal.i.floor) ? cal.i.floor : 0;
+            const gain = cal && cal.i && Number.isFinite(cal.i.gain) ? cal.i.gain : 1;
+            let i = Math.sqrt(Math.max(0, c.irms ** 2 - floor ** 2)) * gain;
+            if (i < N('I_DEADBAND_A', 0.05)) i = 0;
+            current = { a: i, peak: (Number.isFinite(c.ipk) ? c.ipk : 0) * gain, clip: !!c.clip, va: i * N('AC_VOLTAGE_NOMINAL', 220) * N('AC_POWER_FACTOR', 1) };
+        }
         return { battery, current };
     }
 
@@ -126,8 +151,10 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
             chk('high', b.max > N('CELL_V_MAX', 4.25), 'high', { v: b.max.toFixed(2) }, 'crit');
             if (b.mode === 'cells') chk('delta', b.delta > N('CELL_DELTA_WARN', 0.1), 'delta', { v: b.delta.toFixed(2) });
         }
-        chk('amp', c.current.a > N('I_WARN_A', 5), 'amp', { a: c.current.a.toFixed(2) });
-        chk('clip', c.current.clip, 'clip', {}, 'crit');
+        if (c.current) {
+            chk('amp', c.current.a > N('I_WARN_A', 5), 'amp', { a: c.current.a.toFixed(2) });
+            chk('clip', c.current.clip, 'clip', {}, 'crit');
+        }
     }
 
     // ---------- DHT11 (suhu & kelembapan) ----------
@@ -194,6 +221,9 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
     const push = () => broadcast({ type: 'SENSOR', data: snapshot() });
 
     function ingest(j) {
+        // Balasan yang bukan objek JSON (mis. halaman login portal ESP saat masih mode
+        // setup) diperlakukan sebagai kegagalan pembacaan, bukan sebagai data sensor.
+        if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error(T('esp.badData'));
         raw = j; fails = 0; lastOk = Date.now(); lastError = ''; lastErrorAt = 0;
         if (!online) {
             online = true;
@@ -202,17 +232,22 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
             everOnline = true;
         }
         if (zeroing) {   // kalibrasi nol: abaikan 5 pembacaan awal (filter masih menyesuaikan), rata-ratakan 5 berikutnya
-            zeroing.push(j.current.irms);
-            if (zeroing.length >= 10) {
-                cal.i.floor = zeroing.slice(5).reduce((a, b) => a + b, 0) / 5;
-                zeroing = null; saveCal();
+            const irms = j.current && Number.isFinite(j.current.irms) ? j.current.irms : null;
+            if (irms == null) {
+                zeroing = null;                       // data arus tidak tersedia: batalkan kalibrasi
+            } else {
+                zeroing.push(irms);
+                if (zeroing.length >= 10) {
+                    cal.i.floor = zeroing.slice(5).reduce((a, b) => a + b, 0) / 5;
+                    zeroing = null; saveCal();
+                }
             }
         }
         const c = compute();
         if (c) {
             const d = dhtOf(j);
             const t = Date.now();
-            hist.push({ t, v: c.battery ? c.battery.pack : null, i: c.current.a, tc: d ? d.t : null, h: d ? d.h : null });
+            hist.push({ t, v: c.battery ? c.battery.pack : null, i: c.current ? c.current.a : null, tc: d ? d.t : null, h: d ? d.h : null });
             if (hist.length > 300) hist.shift();
             // Riwayat sensor bertimestamp untuk skill get_sensor_history & automasi.
             if (sensorHistory && typeof sensorHistory.ingest === 'function') {
@@ -233,6 +268,7 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
     }
 
     async function poll() {
+        const my = gen;                  // penanda siklus ini (start()/stop() menaikkan gen)
         const seq = relaySeq;
         try {
             const j = await call('/api/data');
@@ -250,6 +286,9 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
             }
             push();
         }
+        // Siklus yang sudah digantikan start()/stop() berhenti di sini, supaya
+        // memuat ulang pengaturan tidak pernah membuat dua rantai polling berjalan.
+        if (my !== gen) return;
         timer = setTimeout(poll, N('ESP32_POLL_MS', 1000));
     }
 
@@ -310,16 +349,33 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
         const st = parseState(state);
         if (ch === null || st === null) throw new Error(T('esp.badChannel'));
         relaySeq++;
-        const j = await call(`/api/relay?ch=${ch}&state=${st ? 1 : 0}`, 'POST');
-        relaySeq++;
+        let j;
+        try {
+            j = await call(`/api/relay?ch=${ch}&state=${st ? 1 : 0}`, 'POST');
+        } finally {
+            relaySeq++;
+        }
+        // Perintah hanya dilaporkan berhasil setelah ESP32 mengonfirmasi. Balasan HTTP 200
+        // dengan {"ok":false} berarti firmware MENOLAK perintah, jadi bukan keberhasilan.
+        if (!j || typeof j !== 'object') throw new Error(T('esp.relayNoConfirm'));
+        if (j.ok === false) throw new Error(T('esp.relayRejected'));
         if (!raw) raw = { relays: DEFAULT_RELAYS.map(r => ({ ...r, on: 0 })) };
-        if (j && Array.isArray(j.relays)) {
+        if (Array.isArray(j.relays)) {
+            const want = st ? 1 : 0;
+            const observed = ch === 'all' ? j.relays.map(r => (r && r.on ? 1 : 0)) : [j.relays[ch - 1] && j.relays[ch - 1].on ? 1 : 0];
+            if (observed.length && observed.some(v => v !== want)) {
+                raw.relays = j.relays;            // tampilkan keadaan sebenarnya yang dilaporkan ESP
+                if (j.aux) raw.aux = j.aux;
+                push();
+                throw new Error(T('esp.relayNoConfirm'));
+            }
             raw.relays = j.relays;
         } else if (Array.isArray(raw.relays)) {
-            if (ch === 'all') raw.relays.forEach(r => { r.on = st ? 1 : 0; });
-            else if (raw.relays[ch - 1]) raw.relays[ch - 1].on = st ? 1 : 0;
+            // Firmware lama yang tidak mengembalikan daftar relay: tidak ada konfirmasi
+            // per-kanal, jadi status lokal tidak diklaim berubah lebih dulu.
+            throw new Error(T('esp.relayNoConfirm'));
         }
-        if (j && j.aux) raw.aux = j.aux;
+        if (j.aux) raw.aux = j.aux;
         else if (Array.isArray(raw.relays) && raw.relays[0]) raw.aux = auxOf(raw);
         push();
         return snapshot();
@@ -329,7 +385,14 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
         const { id, state } = req.body || {};
         if (parseState(state) === null || resolveChannel(id) === null) return res.status(400).json({ success: false, message: T('esp.badChannel') });
         setRelay(id, state).then(data => res.json({ success: true, relays: data.relays, aux: data.aux }))
-            .catch(e => res.status(e.message === T('esp.badChannel') ? 400 : 502).json({ success: false, message: e.message === T('esp.badChannel') ? e.message : T('esp.noResp', { e: e.message }) }));
+            .catch(e => {
+                // Pesan yang sudah jelas (kanal salah / perangkat menolak / status tidak
+                // dikonfirmasi) diteruskan apa adanya; hanya gangguan jaringan yang
+                // dibungkus "tidak merespons".
+                const known = [T('esp.badChannel'), T('esp.relayRejected'), T('esp.relayNoConfirm')].includes(e.message);
+                const status = e.message === T('esp.badChannel') ? 400 : 502;
+                res.status(status).json({ success: false, message: known ? e.message : T('esp.noResp', { e: e.message }) });
+            });
     });
 
     app.post('/api/esp32/calibrate', (req, res) => {
@@ -339,7 +402,7 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
         const okGain = g => g >= 0.5 && g <= 2;
 
         if (type === 'tap') {
-            const b = raw && raw.battery.find(x => x.id === id && x.en);
+            const b = raw && Array.isArray(raw.battery) ? raw.battery.find(x => x && x.id === id && x.en) : null;
             if (!b || !(a > 0) || !(b.v > 0)) return bad(T('esp.calNoData'));
             if (!okGain(a / b.v)) return bad(T('esp.calBigDiff'));
             cal.taps[id] = { gain: a / b.v, offset: 0 };
@@ -349,7 +412,9 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
             push();
             return res.json({ success: true, message: T('esp.zeroing') });
         } else if (type === 'i-gain') {
-            const cur = raw && Math.sqrt(Math.max(0, raw.current.irms ** 2 - cal.i.floor ** 2));
+            const irms = raw && raw.current && Number.isFinite(raw.current.irms) ? raw.current.irms : null;
+            const floor = cal && cal.i && Number.isFinite(cal.i.floor) ? cal.i.floor : 0;
+            const cur = irms == null ? null : Math.sqrt(Math.max(0, irms ** 2 - floor ** 2));
             if (!cur || cur < 0.2 || !(a > 0)) return bad(T('esp.calSmall'));
             if (!okGain(a / cur)) return bad(T('esp.calBigDiff2'));
             cal.i.gain = a / cur;
@@ -361,7 +426,9 @@ module.exports = ({ app, broadcast, notify, sensorHistory }) => {
         res.json({ success: true, message: T('esp.calSaved') });
     });
 
-    function stop() { clearTimeout(timer); timer = null; }
+    // stop() menaikkan gen: siklus poll() yang sedang menunggu balasan HTTP tidak akan
+    // menjadwalkan putaran berikutnya, jadi hanya ada SATU rantai polling pada satu waktu.
+    function stop() { gen++; clearTimeout(timer); timer = null; }
 
     // Dipanggil saat aplikasi dijalankan dan setelah pengaturan diubah dari web: mulai/ulangi
     // pemantauan dengan IP, port, kunci API, dan interval yang sedang berlaku. Tanpa IP,

@@ -37,8 +37,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
-server.requestTimeout = 0;
-server.headersTimeout = 0;
+server.requestTimeout = 0;              // unggah/kompres besar ke flash disk tidak dipotong
+server.headersTimeout = 60000;          // header yang menggantung ditutup (cegah soket setengah terbuka)
 server.keepAliveTimeout = 120000;
 const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
@@ -143,6 +143,7 @@ async function notify(text, opts = {}) {
 // Sesi yang dicabut/kedaluwarsa langsung memutus koneksinya (lihat WS_CLOSE_REVOKED).
 const WS_CLOSE_UNAUTHORIZED = 4401;
 const WS_CLOSE_REVOKED = 4403;
+const WS_CLOSE_GOING_AWAY = 1001;      // standar: server berhenti, klien boleh menyambung ulang
 function broadcast(obj) {
     const msg = JSON.stringify(obj);
     wss.clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
@@ -169,22 +170,41 @@ function closeSocketsFor(evt) {
 auth.setRevokeHandler(closeSocketsFor);
 
 server.on('upgrade', (req, socket, head) => {
+    // Socket mentah setelah upgrade menjadi tanggung jawab kita: tanpa listener 'error',
+    // klien yang memutus koneksi di tengah handshake (ECONNRESET/EPIPE) akan melempar
+    // exception tak tertangani yang mematikan seluruh server.
+    socket.on('error', () => { try { socket.destroy(); } catch { } });
+
     const r = auth.resolve(req);
     if (!r.ok) {
         const body = '{"success":false,"message":"Authentication required."}';
-        socket.write(
-            'HTTP/1.1 401 Unauthorized\r\n' +
-            'Connection: close\r\n' +
-            'Content-Type: application/json\r\n' +
-            `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` + body
-        );
+        try {
+            socket.write(
+                'HTTP/1.1 401 Unauthorized\r\n' +
+                'Connection: close\r\n' +
+                'Content-Type: application/json\r\n' +
+                `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n` + body
+            );
+        } catch { /* klien sudah pergi */ }
         return socket.destroy();
     }
-    wss.handleUpgrade(req, socket, head, ws => {
-        ws.auth = r;                       // identitas sesi disimpan per koneksi
-        ws.isAlive = true;
-        wss.emit('connection', ws, req);
-    });
+    try {
+        wss.handleUpgrade(req, socket, head, ws => {
+            // Frame yang tidak sah (mis. MASK tidak diset, UTF-8 rusak, payload terlalu
+            // besar) memicu event 'error' pada objek WebSocket. Tanpa listener, ws
+            // melemparnya sebagai uncaughtException dan proses server berhenti.
+            ws.on('error', e => {
+                const msg = String((e && (e.message || e.code)) || 'error').replace(/[\r\n]+/g, ' ').slice(0, 120);
+                console.warn('[WebSocket] koneksi bermasalah:', msg);
+            });
+            ws.auth = r;                       // identitas sesi disimpan per koneksi
+            ws.isAlive = true;
+            wss.emit('connection', ws, req);
+        });
+    } catch (e) {
+        console.warn('[WebSocket] upgrade ditolak:', String(e && e.message).slice(0, 120));
+        try { socket.destroy(); } catch { }
+    }
 });
 
 // Periksa ulang sesi tiap 30 detik: token kedaluwarsa / perangkat dicabut -> putus.
@@ -224,8 +244,25 @@ app.post('/api/settings/lang', (req, res) => {
     saveEnv('LANGUAGE', l);
     res.json({ success: true, message: T('set.saved') });
 });
-// Semua API data, file, dan ESP32 wajib login (halaman login di /public tetap terbuka)
-app.use(['/api/files', '/api/create-folder', '/api/download', '/api/upload', '/api/rename', '/api/paste', '/api/storage', '/api/compress', '/api/esp32', '/api/door', '/api/firmware', '/api/system', '/api/settings', '/api/terminal', '/api/ai', '/api/update', '/uploads'], requireAuth);
+// Semua API data, file, perangkat, dan /uploads wajib login (halaman login di /public
+// tetap terbuka). Daftar PUBLIC_API di bawah adalah SATU-SATUNYA pengecualian; endpoint
+// /api lain tanpa sesi sah langsung ditolak 401. Sebelumnya daftar rute yang dilindungi
+// ditulis manual, sehingga rute yang lupa didaftarkan (atau ditambah di kemudian hari)
+// otomatis terbuka tanpa login.
+const PUBLIC_API = [
+    /^\/api\/login$/, /^\/api\/logout$/, /^\/api\/session$/,
+    /^\/api\/settings\/lang$/,               // halaman login & setup memilih bahasa sebelum login
+    /^\/api\/setup(\/|$)/,                    // wizard awal (setiap route menjaga dirinya sendiri)
+    /^\/api\/mobile(\/|$)/,                   // mobile-auth.js memakai Bearer sendiri (401/403 internal)
+    /^\/api\/request-otp$/, /^\/api\/verify-otp$/, /^\/api\/reset-password$/   // pulihkan akun
+];
+app.use((req, res, next) => {
+    const p = req.path;
+    if (p === '/uploads' || p.startsWith('/uploads/')) return requireAuth(req, res, next);
+    if (p !== '/api' && !p.startsWith('/api/')) return next();
+    if (PUBLIC_API.some(rx => rx.test(p))) return next();
+    return requireAuth(req, res, next);
+});
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -267,13 +304,22 @@ app.post('/api/logout', (req, res) => {
 });
 
 // ---- Reset password: OTP Telegram -> token sekali pakai -> ganti password ----
+// Route ini memang publik (dipakai layar login aplikasi & halaman login web), jadi
+// pembatasannya dilakukan di sini: maksimal 3 permintaan OTP per 5 menit per IP supaya
+// chat Telegram admin tidak bisa dibanjiri dan tidak ada OTP yang saling menimpa terus.
 let otp = null, resetTok = null;
+const otpLimiter = createLimiter({ max: 3, blockMs: 5 * 60 * 1000 });
+const noStoreRes = res => res.setHeader('Cache-Control', 'no-store');
 
 app.post('/api/request-otp', async (req, res) => {
+    noStoreRes(res);
     if (!env('TELEGRAM_BOT_TOKEN') || !env('TELEGRAM_CHAT_ID'))
         return res.status(400).json({ success: false, message: T('otp.noTelegram') });
+    const lim = otpLimiter.check(req.ip);
+    if (lim.blocked) return res.status(429).json({ success: false, message: T('otp.wait') });
     if (otp && Date.now() - otp.sent < 60000)
         return res.status(429).json({ success: false, message: T('otp.wait') });
+    otpLimiter.hit(req.ip);        // hitung permintaan (bukan percobaan kode salah)
 
     const code = String(crypto.randomInt(100000, 1000000));
     if (!(await notify(T('otp.tgMsg', { code }))))
@@ -283,6 +329,7 @@ app.post('/api/request-otp', async (req, res) => {
 });
 
 app.post('/api/verify-otp', (req, res) => {
+    noStoreRes(res);                       // token reset tidak boleh tersimpan di cache/proxy
     const code = String((req.body || {}).code || '').trim();
     if (!otp || otp.exp < Date.now() || otp.tries >= 5)
         return res.status(400).json({ success: false, message: T('otp.expired') });
@@ -294,6 +341,7 @@ app.post('/api/verify-otp', (req, res) => {
 });
 
 app.post('/api/reset-password', (req, res) => {
+    noStoreRes(res);
     const { newPassword, confirmPassword, token } = req.body || {};
     if (!resetTok || resetTok.exp < Date.now() || !same(token || '', resetTok.t))
         return res.status(403).json({ success: false, message: T('reset.invalid') });
@@ -534,7 +582,7 @@ function startDevices() {
     esp32.start();
     door.start();
     system.start();
-    telegram.start().then(() => telegram.welcome());
+    telegram.start().then(() => telegram.welcome()).catch(e => console.error('[Telegram]', e.message));
     try { if (ai && typeof ai.start === 'function') ai.start(); } catch (e) { console.error('[AI]', e.message); }
     // Jadwal & otomasi dimulai setelah layanan perangkat hidup; kebijakan jadwal
     // terlewat diterapkan di scheduler.bootstrap() (default: dilewati).
@@ -543,21 +591,66 @@ function startDevices() {
     try { updater.start(); } catch (e) { console.error('[Update]', e.message); }
 }
 
-// Simpan state dan hentikan proses anak dengan rapi saat server berhenti.
-let shuttingDown = false;
-function shutdown() {
-    if (shuttingDown) return;
-    shuttingDown = true;
-    try { scheduler.stop(); } catch { }
-    try { updater.stop(); } catch { }
-    try { executor.killAll('shutdown'); } catch { }
+// Simpan state ke disk (dipakai saat berhenti maupun setelah kesalahan tak terduga).
+function flushState() {
     try { sensorHistory.save(); } catch { }
     try { ai && ai.history && ai.history.save(); } catch { }
     try { auth.flush(); } catch { }              // sesi mobile (hash) ke disk
     try { mobileAuth.flush(); } catch { }        // daftar perangkat mobile ke disk
 }
+
+// Hentikan SEMUA yang berjalan lalu simpan state (dipakai SIGINT/SIGTERM dan process.exit).
+// Sebelumnya hanya scheduler/updater/executor yang dihentikan: siklus polling ESP32,
+// pintu, sistem, dan Telegram masih hidup (bisa memulai permintaan HTTP baru saat
+// proses sedang mati), koneksi WebSocket dashboard tidak pernah ditutup, dan soket
+// pendengar tidak pernah ditutup.
+let shuttingDown = false;
+function shutdown() {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    try { clearInterval(wsWatch); } catch { }        // pemeriksa sesi WS
+    try { esp32.stop(); } catch { }
+    try { door.stop(); } catch { }
+    try { system.stop(); } catch { }
+    try { telegram.stop(); } catch { }
+    try { scheduler.stop(); } catch { }
+    try { updater.stop(); } catch { }
+    try { executor.killAll('shutdown'); } catch { }
+    try { sensorHistory.stop(); } catch { }
+    try { confirm.stop(); } catch { }
+    flushState();
+    try { auth.stop(); } catch { }                   // sesi mobile + sweeper
+    try { mobileAuth.stop(); } catch { }             // daftar perangkat mobile
+    // Tutup dashboard/klien WebSocket dengan kode "going away" supaya aplikasi tahu
+    // harus menyambung ulang, bukan menganggap frame-nya rusak.
+    for (const ws of wss.clients) {
+        try { ws.close(WS_CLOSE_GOING_AWAY, 'server shutdown'); } catch { }
+        try { ws.terminate(); } catch { }
+    }
+    try { server.close(); } catch { }
+    try { if (typeof server.closeAllConnections === 'function') server.closeAllConnections(); } catch { }
+}
 process.on('exit', shutdown);
 for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { shutdown(); process.exit(130); });
+
+// ================= JARING PENGAMAN PROSES =================
+// Di Termux tidak ada supervisor: satu promise yang ditolak tanpa penanganan tidak
+// boleh mematikan pemantauan ESP32/pintu (Node 22 menghentikan proses bila tidak
+// ditangani). Kesalahan dicatat TANPA stack trace dan tanpa isi permintaan, lalu
+// state penting disimpan; proses tetap hidup supaya layanan rumah tidak ikut mati.
+function logProcessError(label, err) {
+    const msg = err && err.message ? err.message : String(err == null ? '' : err);
+    const clean = msg.replace(/[\r\n]+/g, ' ').slice(0, 300);
+    console.error(label, clean || 'tanpa pesan');
+}
+process.on('unhandledRejection', reason => {
+    logProcessError('[Jaring] promise ditolak tanpa penanganan:', reason);
+    flushState();
+});
+process.on('uncaughtException', err => {
+    logProcessError('[Jaring] exception tak tertangani:', err);
+    flushState();
+});
 
 // ================= PENUTUP ROUTE =================
 // API tak dikenal -> JSON 404 (bukan halaman HTML) supaya aplikasi bisa membedakan

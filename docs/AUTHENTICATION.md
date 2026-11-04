@@ -257,6 +257,7 @@ origin).
 | `MOBILE_CHALLENGE_TTL_MS` | `60000` | Umur challenge |
 | `MOBILE_CHALLENGE_SKEW_MS` | `60000` | Toleransi selisih jam perangkat |
 | `MOBILE_MAX_PENDING_CHALLENGES` | `2000` | Batas challenge tersimpan di memori |
+| `MOBILE_MAX_SESSIONS_PER_DEVICE` | `10` | Batas sesi aktif per perangkat (1–100). Sesi terlama dicabut otomatis saat batas terlampaui |
 | `MOBILE_AUTH_SERVER_ORIGIN` | *(kosong)* | Origin eksplisit (dipisah koma) untuk reverse proxy |
 | `SESSION_TTL_HOURS` | `12` | Masa berlaku cookie dashboard |
 | `JSON_BODY_LIMIT` | `512kb` | Batas body JSON |

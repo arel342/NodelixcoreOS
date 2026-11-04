@@ -133,8 +133,10 @@ NodelixcoreOS/
 │   ├── API.md               <- kontrak REST lengkap (web + mobile)
 │   ├── AUTHENTICATION.md    <- cookie, Bearer, ECDSA, revocation
 │   ├── WEBSOCKET.md         <- handshake, event, kode penutupan
-│   └── UPGRADE.md           <- instalasi/upgrade Termux tanpa kehilangan data
-├── tests/                   <- `npm test` (172 tes, tanpa perangkat keras)
+│   ├── UPGRADE.md           <- instalasi/upgrade Termux tanpa kehilangan data
+│   ├── SERVER_BUG_AUDIT.md  <- audit bug backend (temuan + status)
+│   └── SERVER_BUG_FIX_REPORT.md <- laporan perbaikan (12 bagian)
+├── tests/                   <- `npm test` (210 tes, tanpa perangkat keras)
 ├── data/
 │   ├── calibration.json
 │   ├── mobile-devices.json  <- kunci publik perangkat Android (runtime, gitignored)
@@ -733,7 +735,9 @@ tidak pernah lewat URL, dan tidak pernah muncul di log.
 
 Kontrak lengkap beserta contoh request/response: [`docs/API.md`](docs/API.md) dan
 [`docs/AUTHENTICATION.md`](docs/AUTHENTICATION.md). WebSocket:
-[`docs/WEBSOCKET.md`](docs/WEBSOCKET.md).
+[`docs/WEBSOCKET.md`](docs/WEBSOCKET.md). Hasil audit bug backend dan laporan
+perbaikannya: [`docs/SERVER_BUG_AUDIT.md`](docs/SERVER_BUG_AUDIT.md) dan
+[`docs/SERVER_BUG_FIX_REPORT.md`](docs/SERVER_BUG_FIX_REPORT.md).
 
 Contoh login mobile dengan `curl` (setelah registrasi):
 
@@ -868,7 +872,7 @@ Project ini menggunakan lisensi yang ditentukan pada `package.json`.
 Versi **1.2.0** — menambahkan autentikasi aplikasi Android (ECDSA P-256 + Bearer)
 tanpa mengubah login web, dashboard, integrasi ESP, maupun penyimpanan pengguna.
 
-Yang sudah diuji otomatis (`npm test`, 172 tes, tanpa perangkat keras):
+Yang sudah diuji otomatis (`npm test`, 210 tes, tanpa perangkat keras):
 
 * login web lama + cookie `sid`, rate limit 5 percobaan
 * registrasi perangkat mobile, challenge, verifikasi ECDSA (DER & r||s), replay
@@ -879,6 +883,17 @@ Yang sudah diuji otomatis (`npm test`, 172 tes, tanpa perangkat keras):
 * sesi mobile bertahan setelah restart proses (server sungguhan, port acak)
 * file manager (folder/daftar/rename/hapus + traversal ditolak), validasi relay,
   OTA menolak berkas salah
+* gerbang `/api` deny-by-default: rute baru tidak pernah terbuka tanpa login
+* frame WebSocket rusak (mask hilang/UTF-8 salah) tidak mematikan proses, dan
+  `SIGTERM` menutup server dengan kode `130` tanpa exception
+* perintah relay/pintu hanya dilaporkan `success` setelah perangkat mengonfirmasi;
+  penolakan perangkat dijawab `502` beserta alasannya
+* payload sensor/status perangkat yang rusak tidak membuat perangkat tampak offline
+  dan tidak menghasilkan data palsu
+* wizard setup tidak lagi mengirim kunci API/token ke pengunjung yang belum login,
+  dan kunci kosong tidak menghapus kunci tersimpan
+* arah update (`aheadCount`/`behindCount`), batas sesi mobile per perangkat, serta
+  kebijakan jadwal terlewat yang juga berlaku saat proses berjalan
 
 Yang **belum** diverifikasi di perangkat fisik: pembukaan pintu, enrollment kartu,
 relay sungguhan, kestabilan flash disk saat dicabut, pengiriman file besar ke Telegram,

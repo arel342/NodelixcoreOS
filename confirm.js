@@ -150,9 +150,13 @@ module.exports = function createConfirmStore({
 
     function list(ident = {}) {
         const out = [];
+        const t = now();
         for (const rec of items.values()) {
             try {
                 assertIdentity(rec, ident);
+                // Konfirmasi yang sudah lewat masa berlaku tidak boleh tampil sebagai
+                // pending: tombolnya pasti ditolak (410) sehingga hanya membingungkan.
+                if (rec.status === 'pending' && rec.expiresAt <= t) rec.status = 'expired';
                 if (rec.status === 'pending') out.push(view(rec));
             } catch { }
         }
@@ -160,18 +164,24 @@ module.exports = function createConfirmStore({
     }
 
     const RETENTION_MS = 15 * 60 * 1000;
-    const sweeper = setInterval(() => {
+    // Penyapu: (a) menandai 'expired' lebih awal, (b) membuang rekaman lama.
+    // Tanpa (a) konfirmasi yang kedaluwarsa tapi tidak pernah dibuka tetap berstatus
+    // 'pending' dan terus muncul di daftar konfirmasi dashboard (tombolnya selalu gagal
+    // dengan 410). Kondisi lama juga hanya menghapus rekaman yang sudah lewat masa
+    // retensi sehingga cabang 'done/failed/cancelled' tidak pernah berpengaruh.
+    function sweep() {
         const t = now();
         for (const [id, rec] of items) {
-            if (rec.expiresAt + RETENTION_MS < t || rec.status === 'done' || rec.status === 'failed' || rec.status === 'cancelled') {
-                if (rec.expiresAt + RETENTION_MS < t) items.delete(id);
-            }
+            if (rec.expiresAt + RETENTION_MS < t) { items.delete(id); continue; }
+            if (rec.status === 'pending' && rec.expiresAt <= t) rec.status = 'expired';
         }
-    }, 60000);
+        return items.size;
+    }
+    const sweeper = setInterval(sweep, 60000);
     if (sweeper.unref) sweeper.unref();
 
     return {
-        create, get, view, approve, cancel, complete, list, assertIdentity,
+        create, get, view, approve, cancel, complete, list, assertIdentity, sweep,
         stats: () => {
             const all = [...items.values()];
             return { total: all.length, pending: all.filter(r => r.status === 'pending').length, states: STATES.slice() };

@@ -26,20 +26,24 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
     const required = () => !E('ADMIN_PASSWORD', '');
     const allowed = req => required() || auth.isAuthed(req);
 
-    // Nilai yang dikirim ke halaman setup. Kunci API/token disembunyikan sebelum login.
+    // Nilai yang dikirim ke halaman setup. Kunci API/token TIDAK PERNAH dikirim ke
+    // pengunjung yang belum login (sebelum maupun sesudah setup): halaman hanya menerima
+    // penanda `hasKey`/`hasToken`, dan nilai kosong dari formulir tidak menimpa kunci
+    // yang sudah tersimpan. Nilai sebenarnya ditampilkan hanya untuk sesi dashboard.
     function state(req) {
         const authed = auth.isAuthed(req);
         const s = settings.snapshot();
-        const hide = !authed && !required();
+        const hide = !authed;
+        const secret = v => (hide ? '' : String(v == null ? '' : v));
         return {
             required: required(),
             authed,
             server: { port: s.info.port, ips: s.info.ips, lang: s.info.lang, version: s.info.version, node: s.info.node, env: s.info.envFile },
             account: { username: s.info.username, hasPassword: s.info.setupDone },
-            esp32: { ip: s.esp32.ip, port: s.esp32.port, apiKey: hide ? '' : s.esp32.apiKey },
-            door: { ip: s.door.ip, port: s.door.port, apiKey: hide ? '' : s.door.apiKey, enrollSec: s.door.enrollSec },
-            telegram: { alerts: s.telegram.alerts, token: hide ? '' : s.telegram.token, chatId: hide ? '' : s.telegram.chatId },
-            ai: { enabled: s.ai ? s.ai.enabled : true, apiKey: hide ? '' : (s.ai ? s.ai.apiKey : ''), hasKey: !!(s.ai && s.ai.apiKey), model: s.ai ? s.ai.model : 'gemini-3.5-flash-lite' },
+            esp32: { ip: s.esp32.ip, port: s.esp32.port, apiKey: secret(s.esp32.apiKey), hasKey: !!s.esp32.apiKey },
+            door: { ip: s.door.ip, port: s.door.port, apiKey: secret(s.door.apiKey), hasKey: !!s.door.apiKey, enrollSec: s.door.enrollSec },
+            telegram: { alerts: s.telegram.alerts, token: secret(s.telegram.token), hasToken: !!s.telegram.token, chatId: secret(s.telegram.chatId) },
+            ai: { enabled: s.ai ? s.ai.enabled : true, apiKey: secret(s.ai ? s.ai.apiKey : ''), hasKey: !!(s.ai && s.ai.apiKey), model: s.ai ? s.ai.model : 'gemini-3.5-flash-lite' },
             language: E('LANGUAGE', 'id')
         };
     }
@@ -92,6 +96,9 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
             ? { ip: b.ip, port: b.port, apiKey: b.apiKey }
             : { ip: b.ip, port: b.port, apiKey: b.apiKey, enrollSec: b.enrollSec };
         Object.keys(part).forEach(k => part[k] === undefined && delete part[k]);
+        // Kunci API yang dikosongkan berarti "tidak diubah": formulir setup tidak pernah
+        // menampilkan kunci tersimpan kepada pengunjung yang belum login.
+        if (part.apiKey !== undefined && String(part.apiKey).trim() === '') delete part.apiKey;
         try {
             settings.apply({ [d === 'esp32' ? 'esp32' : 'door']: part });
             // Perangkat yang baru diisi IP-nya langsung dicoba dihubungi
@@ -108,6 +115,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         const b = req.body || {};
         const part = {};
         for (const k of ['alerts', 'token', 'chatId']) if (b[k] !== undefined) part[k] = b[k];
+        if (part.token !== undefined && String(part.token).trim() === '') delete part.token;   // kosong = tidak diubah
         try {
             settings.apply({ telegram: part });
             telegram.restart();

@@ -29,6 +29,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     };
 
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, boot = null, cursor = 0;
+    let gen = 0;                           // penanda rantai polling aktif (start/stop)
     let lastError = '', lastErrorAt = 0;   // error terakhir untuk diagnose_device
     let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
     const lastMsg = {};
@@ -140,6 +141,9 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     }
 
     function ingest(j) {
+        // Balasan yang bukan objek JSON (mis. halaman pengaturan ESP saat mode setup)
+        // adalah kegagalan pembacaan, bukan data status.
+        if (!j || typeof j !== 'object' || Array.isArray(j)) throw new Error(T('door.badData'));
         raw = j; fails = 0; lastOk = Date.now(); lastError = ''; lastErrorAt = 0;
         if (!online) {
             online = true;
@@ -148,7 +152,10 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
             everOnline = true;
         }
         if (j.boot !== boot) { boot = j.boot; cursor = 0; }                     // ESP restart: nomor event mulai lagi dari 1
-        for (const e of (j.events || []).slice().sort((a, b) => a.id - b.id)) {
+        // Daftar event divalidasi: entri tanpa id numerik (payload rusak/firmware lain)
+        // dilewati, bukan membuat seluruh pembacaan status gagal.
+        const events = Array.isArray(j.events) ? j.events.filter(e => e && typeof e === 'object' && Number.isFinite(e.id)) : [];
+        for (const e of events.slice().sort((a, b) => a.id - b.id)) {
             if (e.id > cursor) { cursor = e.id; handle({ ...e, uid: e.uid }); }
         }
         if (enrollUntil && j.enroll === 0 && Date.now() - enrollStart > 2500) enrollUntil = 0;   // ESP sudah keluar dari mode tambah kartu
@@ -157,6 +164,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     }
 
     async function poll() {
+        const my = gen;                  // penanda siklus ini (start()/stop() menaikkan gen)
         try { ingest(await call('/api/status')); }
         catch (e) {
             fails++;
@@ -167,13 +175,21 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
             }
             push();
         }
+        // Siklus yang sudah digantikan start()/stop() berhenti di sini, supaya memuat
+        // ulang pengaturan pintu tidak membuat dua rantai polling berjalan bersamaan.
+        if (my !== gen) return;
         timer = setTimeout(poll, N('DOOR_POLL_MS', 1000));
     }
 
     // ---------- Routes (sudah dilindungi login di server.js) ----------
     const fail = (res, code, message) => res.status(code).json({ success: false, message });
     const needOnline = (res) => online ? true : (fail(res, 502, T('door.offline')), false);
-    const esp = (res, fn) => fn().catch(e => fail(res, 502, T('door.noResp', { e: e.message })));
+    // Pesan yang sudah jelas (perangkat menolak perintah / nama tidak sah) diteruskan apa
+    // adanya; hanya gangguan jaringan yang dibungkus "tidak merespons".
+    const esp = (res, fn) => fn().catch(e => {
+        const known = [T('door.noConfirm'), T('door.offline'), T('door.nameEmpty'), T('door.nameUsed')].includes(e.message);
+        fail(res, 502, known ? e.message : T('door.noResp', { e: e.message }));
+    });
 
     async function setEnabled(enabled) {
         db.enabled = !!enabled;
@@ -183,16 +199,23 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         return { enabled: db.enabled, synced };
     }
 
+    // Perintah hanya dianggap berhasil setelah ESP8266 mengonfirmasi ({"ok":true}).
+    // Balasan {"ok":false} berarti perintah ditolak perangkat.
+    function confirmed(j) {
+        if (j && typeof j === 'object' && j.ok === false) throw new Error(T('door.noConfirm'));
+        return j;
+    }
+
     async function open() {
         if (!online) throw new Error(T('door.offline'));
-        await call(`/api/open?sec=${db.openSec}`, 'POST');
+        confirmed(await call(`/api/open?sec=${db.openSec}`, 'POST'));
         log('remote', 'remoteOpen');
         push();
     }
 
     async function close() {
         if (!online) throw new Error(T('door.offline'));
-        await call('/api/close', 'POST');
+        confirmed(await call('/api/close', 'POST'));
         log('remote', 'remoteClose');
         push();
     }
@@ -203,7 +226,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         if (name && !cardName) throw new Error(T('door.nameEmpty'));
         if (cardName && db.cards.some(c => c.name.toLowerCase() === cardName.toLowerCase())) throw new Error(T('door.nameUsed'));
         const sec = N('DOOR_ENROLL_SECONDS', 30);
-        await call(`/api/enroll?sec=${sec}`, 'POST');
+        confirmed(await call(`/api/enroll?sec=${sec}`, 'POST'));
         pendingCardName = cardName; pendingTelegramEnroll = fromTelegram;
         enrollStart = Date.now(); enrollUntil = enrollStart + sec * 1000;
         log('info', 'enrollStart', { sec });
@@ -212,7 +235,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
 
     async function cancelEnroll() {
         if (!online) throw new Error(T('door.offline'));
-        await call('/api/enroll?sec=0', 'POST');
+        confirmed(await call('/api/enroll?sec=0', 'POST'));
         pendingCardName = ''; pendingTelegramEnroll = false; enrollStart = Date.now(); enrollUntil = 0;
         push();
     }
@@ -237,13 +260,16 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         res.json({ success: true, ...state, message: state.enabled ? T('door.lockOnMsg') : T('door.lockOffMsg') });
     });
 
-    app.post('/api/door/config', (req, res) => {
+    app.post('/api/door/config', async (req, res) => {
         const s = parseInt((req.body || {}).openSec, 10);
         if (!(s >= 0 && s <= 10)) return fail(res, 400, T('door.badSec'));
         db.openSec = s;
         log('info', s === 0 ? 'relaySetPulse' : 'relaySet', { s });
-        bump(); push();
-        res.json({ success: true, message: T('door.secSet', { s }) });
+        // Nilai disimpan di server lebih dulu (tetap berlaku setelah pintu tersambung
+        // lagi). `synced` melaporkan apakah ESP8266 sudah mengonfirmasi, seperti
+        // /api/door/lock — bukan mengklaim sinkronisasi yang belum terjadi.
+        const synced = await bump(); push();
+        res.json({ success: true, synced, message: T('door.secSet', { s }) });
     });
 
     app.post('/api/door/enroll', (req, res) => {
@@ -281,16 +307,22 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         res.json({ success: true, synced, message: T(synced ? 'door.adminSaved' : 'door.adminPending') });
     });
 
-    app.delete('/api/door/cards/:uid', (req, res) => {
+    app.delete('/api/door/cards/:uid', async (req, res) => {
         const uid = normUid(req.params.uid), i = db.cards.findIndex(c => c.uid === uid);
         if (i < 0) return fail(res, 404, T('door.cardNotFound'));
         const [c] = db.cards.splice(i, 1);
         log('warn', 'deleted', { name: c.name });
-        bump(); push();
-        res.json({ success: true });
+        // Kartu dihapus dari server, tetapi ESP8266 baru benar-benar lupa kartu itu setelah
+        // sinkronisasi berhasil. `synced` memberi tahu dashboard/aplikasi apakah perintah
+        // sudah diterima perangkat (sebelumnya hasil sinkronisasi tidak dilaporkan sama sekali).
+        const synced = await bump();
+        push();
+        res.json({ success: true, synced, message: T(synced ? 'door.cardDeleted' : 'door.cardDeletedPending') });
     });
 
-    function stop() { clearTimeout(timer); timer = null; }
+    // stop() menaikkan gen: siklus poll() yang masih menunggu balasan HTTP tidak akan
+    // menjadwalkan putaran berikutnya.
+    function stop() { gen++; clearTimeout(timer); timer = null; }
 
     // Dipanggil saat aplikasi dijalankan dan setelah pengaturan diubah dari web
     // (IP/port/kunci API/interval baru langsung dipakai tanpa restart server).

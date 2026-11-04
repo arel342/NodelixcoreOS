@@ -204,3 +204,74 @@ test('otomasi: skill sensitif (open_door) tidak boleh dipakai dan tetap butuh ko
     confirm.stop();
     s.stop();
 });
+
+// ---------------------------------------------------------------------------
+// Kebijakan jadwal terlewat saat server TETAP berjalan (bukan hanya saat bootstrap)
+// ---------------------------------------------------------------------------
+// Termux bisa membekukan proses di latar belakang dan jam perangkat bisa berubah.
+// Sebelum perbaikan, tick() selalu menjalankan apa pun yang sudah jatuh tempo, jadi
+// jadwal "buka pintu 08:00" bisa dieksekusi berjam-jam terlambat.
+test('jadwal terlewat saat server berjalan: tick tidak menjalankan jadwal yang jauh terlambat (policy skip)', async () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, JSON.stringify({
+        ver: 1, automations: [],
+        schedules: [{
+            id: 'sc-macet', skill: 'set_relay', args: { id: 3, state: false },
+            time: '22:00', repeat: 'daily', nextRun: clock + 1000_000, status: 'active',
+            createdAt: clock, missed: 0
+        }]
+    }));
+    const { s, calls } = makeScheduler(file);
+    // Jadwal belum jatuh tempo -> tick hanya memperbarui jam pemeriksaan.
+    await s.tick();
+    assert.equal(calls.execute.length, 0);
+
+    // Lewati 2 jam (proses sempat beku): 7200 dtk > SCHEDULE_MAX_LATE_S=300.
+    clock += 7200_000;
+    await s.tick();
+    assert.equal(calls.execute.length, 0, 'jadwal yang terlambat 2 jam tidak boleh dijalankan diam-diam');
+    assert.equal(s.schedules[0].missed, 1);
+    s.stop();
+    clock -= 7200_000;
+});
+
+test('jadwal terlewat saat server berjalan: run-once tetap menjalankan sekali', async () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, JSON.stringify({
+        ver: 1, automations: [],
+        schedules: [{
+            id: 'sc-macet2', skill: 'set_relay', args: { id: 5, state: true },
+            time: '22:00', repeat: 'daily', nextRun: clock + 1000_000, status: 'active',
+            createdAt: clock, missed: 0
+        }]
+    }));
+    const { s, calls } = makeScheduler(file, { SCHEDULE_MISSED_POLICY: 'run-once' });
+    await s.tick();
+    assert.equal(calls.execute.length, 0);
+
+    clock += 7200_000;
+    await s.tick();
+    assert.equal(calls.execute.length, 1, 'kebijakan run-once menjalankan satu kali');
+    assert.deepEqual(calls.execute[0].args, { id: 5, state: true });
+    s.stop();
+    clock -= 7200_000;
+});
+
+test('jadwal tepat waktu tetap dijalankan oleh tick (tanpa perubahan perilaku)', async () => {
+    const file = tmpFile();
+    fs.writeFileSync(file, JSON.stringify({
+        ver: 1, automations: [],
+        schedules: [{
+            id: 'sc-tepat', skill: 'set_relay', args: { id: 2, state: true },
+            time: '22:00', repeat: 'daily', nextRun: clock + 1000_000, status: 'active',
+            createdAt: clock, missed: 0
+        }]
+    }));
+    const { s, calls } = makeScheduler(file);
+    clock += 1000_000 + 500;             // 0,5 dtk terlambat -> masih dalam SCHEDULE_MAX_LATE_S
+    await s.tick();
+    assert.equal(calls.execute.length, 1);
+    assert.deepEqual(calls.execute[0].args, { id: 2, state: true });
+    s.stop();
+    clock -= 1000_500;
+});
