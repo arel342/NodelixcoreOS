@@ -339,8 +339,8 @@ async function transfer(kind, srcRel, dstRel) {
   // Tujuan belum ada: pastikan folder induknya (yang sudah diselesaikan symlink-nya)
   // tetap berada di dalam root.
   if (!insidePath(parent.real, parent.root)) throw new PathDenied('Folder tujuan keluar dari folder penyimpanan.');
-  const op = kind === 'move' ? 'mv' : 'cp -r';
-  const r = await run(`${G()}[ -e ${q(dstAbs)} ] && exit 17; ${op} ${q(src.abs)} ${q(dstAbs)}`, 30 * 60 * 1000);
+  const op = kind === 'move' ? `mv -n ${q(src.abs)} ${q(dstAbs)} && [ ! -e ${q(src.abs)} ]` : `cp -rn ${q(src.abs)} ${q(dstAbs)}`;
+  const r = await run(`${G()}[ ! -e ${q(dstAbs)} ] || exit 17; ${op}`, 30 * 60 * 1000);
   if (r.code !== 0) throw fail(r, kind === 'move' ? T('st.pasteFail') : T('st.pasteFail'));
   return { from: String(srcRel), to: String(dstRel), kind };
 }
@@ -389,7 +389,7 @@ async function rename(rel, a, b) {
   const to = await inspect(toRel);
   if (to.ok) throw new PathExists(T('st.exists'));
   if (!insidePath(parent.real, parent.root) || !from.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
-  return exec(`${G()}[ ! -e ${q(to.abs)} ] && mv ${q(from.abs)} ${q(to.abs)}`, T('st.renameFail'));
+  return exec(`${G()}[ ! -e ${q(to.abs)} ] && mv -n ${q(from.abs)} ${q(to.abs)} && [ ! -e ${q(from.abs)} ] || exit 17`, T('st.renameFail'));
 }
 
 async function remove(rel) {
@@ -419,7 +419,10 @@ async function paste(action, srcRel, dstRel, items) {
     const exists = await inspect(toRel);
     if (exists.ok) throw new PathExists(T('st.exists'));
     if (!from.inside || !dst.inside) throw new PathDenied('Jalur keluar dari root penyimpanan ditolak.');
-    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${op} ${q(from.abs)} ${q(toAbs)} || f=1; `);
+    const action = action === 'cut'
+      ? `mv -n ${q(from.abs)} ${q(toAbs)} && [ ! -e ${q(from.abs)} ]`
+      : `cp -rn ${q(from.abs)} ${q(toAbs)}`;
+    cmds.push(`[ -e ${q(from.abs)} ] && [ ! -e ${q(toAbs)} ] && ${action} || f=1; `);
   }
   if (cmds.length) await exec(`${G()}f=0; ${cmds.join('')}exit $f`, T('st.pasteFail'), 3600000);
 }
