@@ -37,9 +37,14 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
-server.requestTimeout = 0;              // unggah/kompres besar ke flash disk tidak dipotong
-server.headersTimeout = 60000;          // header yang menggantung ditutup (cegah soket setengah terbuka)
-server.keepAliveTimeout = 120000;
+// Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
+const boundedMs = (key, fallback, min, max) => {
+    const n = Number(env(key, fallback));
+    return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
+};
+server.requestTimeout = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
+server.headersTimeout = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), server.requestTimeout);
+server.keepAliveTimeout = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
 const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
 const T = require('./lang');            // pesan server sesuai bahasa aktif (LANGUAGE di .env)
@@ -60,9 +65,14 @@ setInterval(auth.flush, 60000).unref();
 // Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
 // pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
 app.disable('x-powered-by');
-// Di balik reverse proxy, aktifkan TRUST_PROXY=true agar rate limit memakai IP klien
-// sebenarnya (X-Forwarded-For). Jangan diaktifkan bila port server terbuka langsung.
-if (String(env('TRUST_PROXY', 'false')).toLowerCase() === 'true') app.set('trust proxy', true);
+// Hanya percayai alamat proxy yang dinyatakan eksplisit (IP/CIDR/keyword Express).
+// TRUST_PROXY=true sengaja tidak diterima karena mempercayai semua hop membuka spoofing.
+const trustedProxyEntries = String(env('TRUST_PROXY', '')).split(',').map(v => v.trim()).filter(Boolean);
+if (trustedProxyEntries.length && trustedProxyEntries.some(v => v.toLowerCase() !== 'true' && v.toLowerCase() !== 'false')) {
+    app.set('trust proxy', trustedProxyEntries.filter(v => !['true', 'false'].includes(v.toLowerCase())));
+} else if (trustedProxyEntries.some(v => v.toLowerCase() === 'true')) {
+    console.warn('[Security] TRUST_PROXY=true tidak aman dan diabaikan; gunakan daftar IP/CIDR proxy tepercaya.');
+}
 app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'no-referrer');
@@ -74,7 +84,7 @@ app.use((req, res, next) => {
         res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     }
     // HSTS hanya dikirim kalau permintaan memang datang lewat HTTPS (reverse proxy TLS).
-    if (req.secure || String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() === 'https') {
+    if (req.secure) {
         res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}`);
     }
     next();
@@ -103,7 +113,6 @@ app.use('/api', (req, res, next) => {
     let host = '';
     try { host = new URL(origin).host.toLowerCase(); } catch { host = ''; }
     const expected = [
-        req.headers['x-forwarded-host'],
         req.headers.host
     ].map(v => String(v || '').split(',')[0].trim().toLowerCase()).filter(Boolean);
     // Origin tambahan yang sengaja dipercaya (reverse proxy yang mengubah Host).
@@ -279,7 +288,7 @@ app.post('/api/login', (req, res) => {
         return res.status(401).json({ success: false, message: T('auth.wrong') });
     }
     loginLimiter.reset(req.ip);
-    createSession(res);
+    createSession(res, { secure: !!req.secure });
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
