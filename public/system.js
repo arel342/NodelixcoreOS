@@ -75,8 +75,10 @@ async function loadSystem() {
     try {
         const j = await (await fetch('/api/system')).json();
         if (Array.isArray(j.history) && j.history.length) {
-            sys.hist = j.history.map(h => ({ cpu: h.cpu, ram: h.ram }));
+            sys.hist = j.history.map(h => ({ cpu: h.cpu, ram: h.ram })).slice(-90);
         }
-        renderSystem(sys.snap);
+        // Snapshot lengkap dari server dipakai jika WebSocket belum mengirim data.
+        if (j.snapshot && (!sys.snap || (j.snapshot.t || 0) > (sys.snap.t || 0))) sys.snap = j.snapshot;
+        renderSystem();
     } catch (e) { renderSystem(); }
 }

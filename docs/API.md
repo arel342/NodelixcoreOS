@@ -303,7 +303,7 @@ Semua endpoint di bawah menerima **cookie `sid`** maupun **Bearer**.
 
 | Metode & Path | Keterangan |
 |---|---|
-| `GET /api/system` | `{ now, history }` — CPU/RAM/flash + 90 sampel terakhir |
+| `GET /api/system` | `{ now, snapshot, history }` — CPU/RAM/flash terakhir (`snapshot` = data lengkap seperti event `SYSTEM`) + 90 sampel terakhir |
 | `GET /api/settings` | `{ esp32, door, telegram, ai, server, monitor, info }` |
 | `POST /api/settings` | Simpan sebagian pengaturan (validasi ketat, tanpa restart) |
 | `POST /api/settings/account` | Ubah username/password admin (wajib password lama) |

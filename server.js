@@ -523,6 +523,9 @@ wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
     ws.send(JSON.stringify({ type: 'SENSOR', data: esp32.snapshot() }));
     ws.send(JSON.stringify({ type: 'DOOR', data: door.snapshot() }));
+    // Snapshot CPU/RAM terakhir langsung dikirim supaya tab Sistem tidak kosong
+    // menunggu siklus polling berikutnya.
+    try { const snap = system.snapshot(); if (snap) ws.send(JSON.stringify({ type: 'SYSTEM', data: snap })); } catch { }
     // Status update tersimpan dikirim ke setiap perangkat yang terhubung — tanpa
     // menyentuh GitHub, jadi login/muat ulang dashboard tidak memicu pemeriksaan baru.
     try { ws.send(JSON.stringify({ type: 'UPDATE', data: updater.view() })); } catch { }
