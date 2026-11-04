@@ -119,7 +119,7 @@ app.use('/api', (req, res, next) => {
     const trusted = String(env('TRUSTED_ORIGINS', '')).split(',')
         .map(o => o.trim().toLowerCase().replace(/\/+$/, '')).filter(Boolean);
     const normalized = String(origin).trim().toLowerCase().replace(/\/+$/, '');
-    if (!host || expected.includes(host) || trusted.includes(normalized) || trusted.includes(host)) return next();
+    if (host && (expected.includes(host) || trusted.includes(normalized) || trusted.includes(host))) return next();
     res.status(403).json({
         success: false,
         error: 'Permintaan lintas situs ditolak (CSRF).',
