@@ -67,8 +67,15 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         if (password !== String(b.confirmPassword == null ? '' : b.confirmPassword))
             return res.status(400).json({ success: false, message: T('setup.pwMismatch') });
 
+        const hadAdminPassword = !!E('ADMIN_PASSWORD', '');
+        const passwordChanged = hadAdminPassword && password !== E('ADMIN_PASSWORD', '');
         saveEnv('ADMIN_USERNAME', username);
         saveEnv('ADMIN_PASSWORD', password);
+        if (passwordChanged) {
+            // Jalur setup yang dipakai admin terautentikasi juga dapat mereset password.
+            auth.revokeAllMobileSessions('admin_password_reset');
+            auth.keepOnly(req);
+        }
         // Langsung buat sesi login: langkah berikutnya (ESP32/ESP8266/Telegram) jadi
         // terautentikasi, dan halaman setup tertutup untuk orang lain begitu akun ada.
         auth.createSession(res, { secure: !!req.secure });
