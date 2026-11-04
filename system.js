@@ -1,140 +1,232 @@
-// Monitor CPU, RAM, dan flash disk perangkat server (HP Android).
-// /proc dibaca langsung; kalau dibatasi Android, otomatis beralih lewat `su` (perangkat sudah root).
-// Data dikirim ke semua klien lewat WebSocket {type:'SYSTEM'} tiap 2 detik,
-// dan riwayat 90 sampel terakhir (±3 menit) tersedia di /api/system untuk menggambar diagram garis.
+// Monitor CPU, RAM, dan flash disk perangkat server (termasuk Android/Termux).
+// Prioritas: /proc (lebih akurat pada Linux), lalu API os bawaan Node.js sebagai fallback.
+// Data dikirim lewat WebSocket {type:'SYSTEM'} dan riwayat tersedia di /api/system.
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
 
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
-const POLL_MS = +E('SYSTEM_POLL_MS', 2000);   // interval sampling CPU/RAM
-const FLASH_MS = 10000;                        // cek flash disk lebih jarang (perlu su, agak berat)
-const HMAX = 90;                               // jumlah sampel riwayat yang disimpan
+const pollValue = Number(E('SYSTEM_POLL_MS', 2000));
+const POLL_MS = Number.isFinite(pollValue) ? Math.max(1000, Math.min(30000, Math.floor(pollValue))) : 2000;
+const FLASH_MS = 10000;
+const HMAX = 90;
 
 module.exports = ({ app, broadcast }) => {
     const storage = require('./storage');
     const useSu = () => storage.MODE !== 'direct';
 
-    // Baca /proc/stat + /proc/meminfo: langsung dulu, fallback lewat su
     async function readProc() {
         try {
             const stat = fs.readFileSync('/proc/stat', 'utf8');
             const mem = fs.readFileSync('/proc/meminfo', 'utf8');
-            if (/^cpu\s/m.test(stat) && /MemTotal/.test(mem)) return { stat, mem };
-            throw new Error('proc kosong');
-        } catch {
-            return new Promise(resolve => {
-                const cmd = `head -n 8 /proc/stat; echo '==='; grep -E 'MemTotal|MemAvailable' /proc/meminfo`;
-                const [bin, args] = useSu() ? [storage.SU, ['-c', cmd]] : ['sh', ['-c', cmd]];
-                let out = '';
-                const c = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
-                const t = setTimeout(() => { c.kill('SIGKILL'); resolve(null); }, 8000);
-                c.stdout.setEncoding('utf8');
-                c.stdout.on('data', d => out += d);
-                c.on('error', () => { clearTimeout(t); resolve(null); });
-                c.on('close', code => {
-                    clearTimeout(t);
-                    if (code !== 0) return resolve(null);
-                    const i = out.indexOf('\n===\n');
-                    resolve(i < 0 ? null : { stat: out.slice(0, i), mem: out.slice(i + 5) });
-                });
+            if (/^cpu\\s/m.test(stat) && /^MemTotal:/m.test(mem)) return { stat, mem };
+        } catch { /* /proc mungkin dibatasi Android */ }
+
+        // Fallback hanya untuk perangkat yang memang memerlukan akses root.
+        if (!useSu()) return null;
+        return new Promise(resolve => {
+            const cmd = "head -n 8 /proc/stat; echo '==='; grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached|SReclaimable|Shmem):' /proc/meminfo";
+            const [bin, args] = [storage.SU, ['-c', cmd]];
+            let out = '';
+            let settled = false;
+            const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
+            const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+            const timer = setTimeout(() => { try { child.kill('SIGKILL'); } catch {} finish(null); }, 4000);
+            child.stdout.setEncoding('utf8');
+            child.stdout.on('data', chunk => { if (out.length < 32768) out += chunk; });
+            child.on('error', () => finish(null));
+            child.on('close', code => {
+                if (code !== 0) return finish(null);
+                const marker = out.indexOf('\\n===\\n');
+                if (marker < 0) return finish(null);
+                finish({ stat: out.slice(0, marker), mem: out.slice(marker + 5) });
             });
+        });
+    }
+
+    let prevProcCpu = null;
+    let prevOsCpu = null;
+    function cpuFromCounters(values, previous) {
+        if (!values.length || values.some(v => !Number.isFinite(v) || v < 0)) return { pct: null, next: previous };
+        const idle = values[3] + (values[4] || 0);
+        const total = values.reduce((sum, value) => sum + value, 0);
+        if (!Number.isFinite(total) || total <= 0) return { pct: null, next: previous };
+        const next = { idle, total };
+        if (!previous || total <= previous.total || idle < previous.idle) return { pct: null, next };
+        const deltaTotal = total - previous.total;
+        const deltaIdle = idle - previous.idle;
+        if (deltaTotal <= 0) return { pct: null, next };
+        return { pct: Math.max(0, Math.min(100, (1 - deltaIdle / deltaTotal) * 100)), next };
+    }
+
+    function cpuPctFromProc(stat) {
+        const line = /^cpu\\s+([\\d\\s]+)/m.exec(String(stat || ''));
+        if (!line) return null;
+        // Field guest/guest_nice sudah termasuk dalam user/nice; jangan dihitung dua kali.
+        const values = line[1].trim().split(/\\s+/).map(Number).slice(0, 8);
+        if (values.length < 4) return null;
+        const result = cpuFromCounters(values, prevProcCpu);
+        prevProcCpu = result.next;
+        return result.pct;
+    }
+
+    function cpuPctFromOs() {
+        try {
+            const cpus = os.cpus();
+            if (!Array.isArray(cpus) || !cpus.length) return null;
+            const values = cpus.map(cpu => cpu.times).filter(Boolean);
+            if (values.length !== cpus.length) return null;
+            const aggregate = Array(5).fill(0);
+            for (const times of values) {
+                aggregate[0] += Number(times.user) || 0;
+                aggregate[1] += Number(times.nice) || 0;
+                aggregate[2] += Number(times.sys) || 0;
+                aggregate[3] += Number(times.idle) || 0;
+                // IRQ tetap dihitung sebagai waktu sibuk, bukan waktu idle.
+            }
+            const result = cpuFromCounters(aggregate, prevOsCpu);
+            prevOsCpu = result.next;
+            return result.pct;
+        } catch { return null; }
+    }
+
+    function ramInfoFromProc(mem) {
+        const get = key => {
+            const match = new RegExp('^' + key + ':\\s+(\\d+)\\s+kB', 'm').exec(String(mem || ''));
+            return match ? Number(match[1]) * 1024 : null;
+        };
+        const total = get('MemTotal');
+        if (!(total > 0)) return null;
+        let available = get('MemAvailable');
+        if (available == null) {
+            const free = get('MemFree');
+            const buffers = get('Buffers');
+            const cached = get('Cached');
+            const reclaimable = get('SReclaimable');
+            const shared = get('Shmem') || 0;
+            // Kernel lama dapat tidak menyediakan MemAvailable. Jika seluruh field
+            // estimasi juga tidak ada, serahkan ke os.freemem() agar tidak melaporkan 100%.
+            if (free == null && buffers == null && cached == null && reclaimable == null) return null;
+            available = Math.min(total, Math.max(0, (free || 0) + (buffers || 0) + (cached || 0) + (reclaimable || 0) - shared));
         }
-    }
-
-    // Persen CPU dari selisih dua pembacaan /proc/stat (baris agregat "cpu ...")
-    let prevCpu = null;
-    function cpuPct(stat) {
-        const m = /^cpu\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)/m.exec(stat);
-        if (!m) return null;
-        const v = m.slice(1).map(Number);
-        const idle = v[3] + v[4], total = v.reduce((a, b) => a + b, 0);
-        const cur = { idle, total };
-        let pct = null;
-        if (prevCpu && total > prevCpu.total) pct = Math.max(0, Math.min(100, (1 - (idle - prevCpu.idle) / (total - prevCpu.total)) * 100));
-        prevCpu = cur;
-        return pct;
-    }
-
-    function ramInfo(mem) {
-        const g = k => { const m = new RegExp('^' + k + ':\\s+(\\d+) kB', 'm').exec(mem); return m ? +m[1] * 1024 : null; };
-        const total = g('MemTotal'), avail = g('MemAvailable');
-        if (total == null) return null;
-        const used = total - (avail != null ? avail : 0);
+        const used = Math.max(0, Math.min(total, total - available));
         return { total, used, pct: Math.max(0, Math.min(100, used / total * 100)) };
+    }
+
+    function ramInfoFromOs() {
+        try {
+            const total = Number(os.totalmem()), free = Number(os.freemem());
+            if (!(Number.isFinite(total) && total > 0 && Number.isFinite(free) && free >= 0)) return null;
+            const used = Math.max(0, Math.min(total, total - free));
+            return { total, used, pct: Math.max(0, Math.min(100, used / total * 100)) };
+        } catch { return null; }
     }
 
     let flash = { ready: false }, flashAt = 0;
     async function flashInfo() {
         if (Date.now() - flashAt < FLASH_MS) return flash;
         try {
-            const s = await storage.status();
-            flash = { ready: !!s.ready, total: s.total || null, free: s.free || null, root: s.root, message: s.ready ? null : s.message };
-        } catch (e) { flash = { ready: false, message: e.message }; }
+            const status = await storage.status();
+            flash = { ready: !!status.ready, total: status.total || null, free: status.free || null, root: status.root, message: status.ready ? null : status.message };
+        } catch (error) { flash = { ready: false, message: String(error && error.message || 'Storage unavailable') }; }
         flashAt = Date.now();
         return flash;
     }
 
-    const hist = [];   // [{t, cpu, ram}]
+    const hist = [];
     let last = { t: 0, cpu: null, ram: null };
-    let lastFull = null;   // snapshot lengkap terakhir untuk /api/system & skill sistem
+    let lastFull = null;
 
     async function sample() {
         const unavailable = [];
-        const p = await readProc();
-        if (p) {
-            const cpu = cpuPct(p.stat), ram = ramInfo(p.mem);
-            if (cpu != null || ram) {
-                last = { t: Date.now(), cpu: cpu == null ? last.cpu : cpu, ram: ram || last.ram };
-                hist.push({ t: last.t, cpu: last.cpu, ram: last.ram ? +last.ram.pct.toFixed(1) : null });
-                if (hist.length > HMAX) hist.shift();
-            }
-        } else {
-            unavailable.push('cpu_ram');
+        const proc = await readProc();
+        let cpu = proc ? cpuPctFromProc(proc.stat) : null;
+        let ram = proc ? ramInfoFromProc(proc.mem) : null;
+        let cpuSource = cpu != null ? 'proc' : '';
+        let ramSource = ram ? 'proc' : '';
+
+        // Jangan biarkan dashboard N/A hanya karena akses /proc ditolak oleh Android.
+        if (cpu == null) {
+            cpu = cpuPctFromOs();
+            if (cpu != null) cpuSource = 'node-os';
         }
-        if (last.cpu == null) { if (!unavailable.includes('cpu')) unavailable.push('cpu'); }
-        if (!last.ram) { if (!unavailable.includes('ram')) unavailable.push('ram'); }
+        if (!ram) {
+            ram = ramInfoFromOs();
+            if (ram) ramSource = 'node-os';
+        }
+
+        if (cpu != null || ram) {
+            last = { t: Date.now(), cpu: cpu == null ? last.cpu : cpu, ram: ram || last.ram };
+            hist.push({ t: last.t, cpu: last.cpu, ram: last.ram ? +last.ram.pct.toFixed(1) : null });
+            if (hist.length > HMAX) hist.shift();
+        }
+        if (last.cpu == null) unavailable.push('cpu');
+        if (!last.ram) unavailable.push('ram');
+
         const fl = await flashInfo();
         let cores = 0, model = '';
-        try { const c = os.cpus(); cores = c.length; model = (c[0] && c[0].model) || ''; } catch { }
+        try {
+            const cpus = os.cpus();
+            cores = cpus.length;
+            model = (cpus[0] && cpus[0].model) || '';
+        } catch { }
         if (!cores) unavailable.push('cores');
+
+        let load = null;
+        try { const values = os.loadavg(); if (values && Number.isFinite(values[0])) load = +values[0].toFixed(2); } catch { }
+        let uptime = null;
+        try { const value = os.uptime(); if (Number.isFinite(value)) uptime = Math.floor(value); } catch { }
+
         const data = {
-            t: last.t || Date.now(), cpu: last.cpu == null ? null : +last.cpu.toFixed(1),
+            t: last.t || Date.now(),
+            cpu: last.cpu == null ? null : +last.cpu.toFixed(1),
             ram: last.ram && { total: last.ram.total, used: last.ram.used, pct: +last.ram.pct.toFixed(1) },
-            flash: fl, cores, model, load: (() => { try { return +os.loadavg()[0].toFixed(2); } catch { return null; } })(),
-            uptime: Math.floor(os.uptime()), unavailable
+            flash: fl, cores, model, load, uptime,
+            source: { cpu: cpuSource || (last.cpu != null ? 'cached' : null), ram: ramSource || (last.ram ? 'cached' : null) },
+            unavailable
         };
         lastFull = data;
-        broadcast({ type: 'SYSTEM', data });
+        try { broadcast({ type: 'SYSTEM', data }); } catch { /* client WebSocket dapat terputus */ }
         return data;
     }
 
     let timer = null;
-    let gen = 0;                   // penanda rantai sampling aktif (start/stop)
+    let generation = 0;
     function loop() {
-        const my = gen;
-        sample().catch(() => { }).finally(() => {
-            // Siklus yang sudah digantikan start()/stop() tidak menjadwalkan putaran baru,
-            // jadi start() yang dipanggil dua kali tidak menggandakan broadcast SYSTEM.
-            if (my !== gen) return;
+        const current = generation;
+        sample().catch(error => {
+            const data = lastFull || {
+                t: Date.now(), cpu: null, ram: null, flash: { ready: false, message: 'Monitoring error' },
+                cores: 0, model: '', load: null, uptime: null, source: { cpu: null, ram: null },
+                unavailable: ['cpu', 'ram']
+            };
+            data.monitorError = String(error && error.message || 'sampling failed').slice(0, 120);
+            lastFull = data;
+            try { broadcast({ type: 'SYSTEM', data }); } catch { }
+        }).finally(() => {
+            if (current !== generation) return;
             timer = setTimeout(loop, POLL_MS);
         });
     }
 
-    // Sudah dilindungi login di server.js
     app.get('/api/system', (req, res) => res.json({ now: last, history: hist }));
 
-    // Accessor untuk skill AI/diagnosis: selalu mengembalikan nilai yang benar-benar
-    // dibaca. Bila sampling belum pernah berhasil, nilai null + daftar unavailable.
     async function getStatus() {
         if (lastFull && Date.now() - (lastFull.t || 0) < Math.max(3000, POLL_MS * 2)) return lastFull;
         try { return await sample(); }
-        catch (e) { return lastFull || { t: Date.now(), cpu: null, ram: null, flash: { ready: false, message: e.message }, cores: 0, load: null, uptime: null, unavailable: ['cpu', 'ram', 'flash'] }; }
+        catch (error) {
+            return lastFull || {
+                t: Date.now(), cpu: null, ram: null,
+                flash: { ready: false, message: String(error && error.message || 'monitoring unavailable') },
+                cores: 0, load: null, uptime: null, source: { cpu: null, ram: null },
+                unavailable: ['cpu', 'ram', 'flash']
+            };
+        }
     }
 
     return {
         start() { stop(); loop(); },
-        stop() { gen++; clearTimeout(timer); timer = null; },
+        stop() { generation++; clearTimeout(timer); timer = null; },
         getStatus,
         history: () => hist.slice(),
         snapshot: () => lastFull
