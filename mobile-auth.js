@@ -457,7 +457,8 @@ module.exports = function createMobileAuth({
 
         const origins = [];
         const push = o => { const n = normOrigin(o); if (n && !origins.includes(n)) origins.push(n); };
-        if (body.serverOrigin != null) push(body.serverOrigin);
+        // Origin hanya boleh berasal dari challenge yang diterbitkan server atau
+        // konfigurasi server-side. Nilai serverOrigin dari klien bukan otoritas.
         (challenge.origins || []).forEach(push);
         requestOrigins(req).forEach(push);
         if (!origins.length) return fail(res, 500, 'origin_unavailable', 'Tidak bisa menentukan origin server untuk verifikasi.');
