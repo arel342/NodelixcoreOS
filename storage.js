@@ -565,7 +565,7 @@ async function saveStream(relDir, rawName, stream, maxBytes = 20 * 1024 * 1024) 
     const existing = await inspect(destRel);
     if (existing.ok) throw new PathExists(T('st.exists'));
     tmp = `${dest}.${crypto.randomBytes(12).toString('hex')}.part`;
-    const prep = await run(`${G()}set -C; : > ${q(tmp)}`);
+    const prep = await run(`${G()}[ ! -e ${q(tmp)} ]`);
     if (prep.code !== 0) throw fail(prep, T('st.saveFileFail'));
   } catch (e) {
     destroyStream();
