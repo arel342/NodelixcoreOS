@@ -142,14 +142,17 @@ module.exports = function createAuth({
         return JSON.stringify({ ver: 1, sessions: list });
     }
 
-    function flush() {
+    function flush({ throwOnError = false } = {}) {
         if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-        if (!mobileDirty) return;
+        if (!mobileDirty) return true;
         try {
             atomicWrite(FILE, serializeMobile());
             mobileDirty = false;
+            return true;
         } catch (e) {
             log(`[Auth] gagal menyimpan sesi mobile: ${e.code || e.message}`);
+            if (throwOnError) throw e;
+            return false;
         }
     }
 
@@ -314,6 +317,23 @@ module.exports = function createAuth({
         return n;
     }
 
+    // Cabut semua sesi Bearer setelah perubahan/reset password admin.
+    // Persist dilakukan sebelum event WebSocket dikirim dan sebelum pemanggil
+    // menganggap operasi berhasil. Jika disk gagal, token ditolak di memori
+    // dan error diteruskan agar endpoint tidak melaporkan sukses.
+    function revokeAllMobileSessions(reason = 'admin_password_changed') {
+        const dropped = Object.entries(mobile);
+        if (!dropped.length) return 0;
+        for (const [hash] of dropped) delete mobile[hash];
+        mobileDirty = true;
+        flush({ throwOnError: true });
+        for (const [hash, s] of dropped) {
+            safeRevoke({ kind: 'mobile', deviceId: s.deviceId, tokenHash: hash, reason });
+        }
+        log(`[Auth] seluruh sesi mobile dicabut: ${dropped.length} (reason=${String(reason).slice(0, 64)})`);
+        return dropped.length;
+    }
+
     function safeRevoke(evt) {
         try { revokeHandler(evt); } catch (e) { log(`[Auth] handler pencabutan gagal: ${e.message}`); }
     }
@@ -406,7 +426,7 @@ module.exports = function createAuth({
         sidOf, bearerOf, createSession, webSession, destroyWebSession, clearWebSessions, keepOnly,
         get webTtlMs() { return webTtlMs; },
         // mobile
-        issueMobileSession, revokeToken, revokeDeviceSessions, refreshMobileSession,
+        issueMobileSession, revokeToken, revokeDeviceSessions, revokeAllMobileSessions, refreshMobileSession,
         mobileSessionCount,
         get mobileTtlMs() { return mobileTtlMs; },
         mobileSessionsFile: FILE,
