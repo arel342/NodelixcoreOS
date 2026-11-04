@@ -287,6 +287,42 @@ async function mkdirPath(rel) {
   return { path: String(rel) };
 }
 
+// Pastikan folder tujuan berada di bawah root. Komponen dibuat satu per satu
+// setelah parent diverifikasi, bukan mkdir -p pada path mentah dari klien.
+async function ensureDirectory(rel = '') {
+  await ensure();
+  const raw = String(rel == null ? '' : rel);
+  abs(raw); // validasi traversal sebelum pemeriksaan filesystem
+  if (!raw) {
+    const current = await inspect('');
+    if (current.ok) {
+      if (!current.inside || !current.isDirectory) throw new PathDenied('Root penyimpanan tidak valid.');
+      return current;
+    }
+    await exec(`${G()}mkdir -p ${q(ROOT)}`, T('st.mkdirFail'));
+    return checked('');
+  }
+  const current = await inspect(raw);
+  if (current.ok) {
+    if (!current.inside) throw new PathDenied('Folder tujuan keluar dari root penyimpanan.');
+    if (!current.isDirectory) throw Object.assign(new Error('Tujuan bukan folder.'), { status: 400 });
+    return current;
+  }
+  const normalized = raw.replace(/\/+$/, '');
+  const parentRel = path.posix.dirname(normalized);
+  const parent = await ensureDirectory(parentRel === '.' ? '' : parentRel);
+  const name = path.posix.basename(normalized);
+  if (!cleanName(name)) throw new PathDenied('Nama folder tidak valid.');
+  const dest = parent.abs + '/' + name;
+  const made = await run(`${G()}mkdir ${q(dest)}`);
+  if (made.code !== 0) {
+    const raced = await inspect(raw);
+    if (!raced.ok || !raced.inside || !raced.isDirectory) throw fail(made, T('st.mkdirFail'));
+    return raced;
+  }
+  return checked(raw);
+}
+
 // Salin / pindahkan satu file atau folder. Tujuan tidak boleh sudah ada (tidak menimpa
 // secara diam-diam) dan folder tidak boleh dipindah ke dalam dirinya sendiri.
 async function transfer(kind, srcRel, dstRel) {
