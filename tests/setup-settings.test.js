@@ -23,7 +23,8 @@ function fixture(file, { env = {}, deps = {}, fetchImpl } = {}) {
         auth: {
             isAuthed: () => false,
             verify: (req, res) => { res.status(403).json({ success: false, message: T('auth.wrong') }); return false; },
-            createSession: () => calls.sessions++, keepOnly() { }
+            createSession: () => calls.sessions++, keepOnly() { },
+            revokeAllMobileSessions: reason => { (calls.revokedAll = calls.revokedAll || []).push(reason); return 0; }
         },
         settings: { snapshot: () => ({ info: {} }), apply: () => { } },
         startDevices: () => calls.startDevices = (calls.startDevices || 0) + 1,
@@ -116,7 +117,7 @@ test('settings: ubah akun butuh password lama, password baru minimal 8 karakter'
 
     const s = fixture('settings.js', {
         env: { ADMIN_PASSWORD: 'rahasia123' },
-        deps: { auth: { isAuthed: () => true, verify: () => true, createSession() { }, keepOnly: () => (s.calls.keepOnly = true) } }
+        deps: { auth: { isAuthed: () => true, verify: () => true, createSession() { }, keepOnly: () => (s.calls.keepOnly = true), revokeAllMobileSessions: reason => { s.calls.revokedAll = reason; return 0; } } }
     });
     assert.equal(s.post('/api/settings/account', { username: 'x' }).code, 400, 'username terlalu pendek');
     assert.equal(s.post('/api/settings/account', { newPassword: 'pendek', confirmPassword: 'pendek' }).code, 400);
@@ -126,6 +127,7 @@ test('settings: ubah akun butuh password lama, password baru minimal 8 karakter'
     assert.equal(s.writes.ADMIN_USERNAME, 'arel');
     assert.equal(s.writes.ADMIN_PASSWORD, 'rahasia456');
     assert.equal(s.calls.keepOnly, true, 'sesi lain diputus setelah password diganti');
+    assert.equal(s.calls.revokedAll, 'admin_password_changed', 'sesi mobile dicabut setelah password diganti');
 });
 
 test('settings: uji koneksi perangkat melaporkan versi firmware', async () => {

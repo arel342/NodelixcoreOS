@@ -76,7 +76,7 @@ test('storage: symlink ke luar root ditolak untuk baca & salin', async () => {
     await assert.rejects(() => storage.mkdirPath('escape/new-folder'), e => e.status === 403);
     assert.equal(fs.existsSync(path.join(rootDir, 'salinan.txt')), false);
     assert.equal(fs.existsSync(path.join(rootDir, 'pindahan.txt')), false);
-    assert.equal(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'rahasia di luar root\\n');
+    assert.equal(fs.readFileSync(path.join(outside, 'secret.txt'), 'utf8'), 'rahasia di luar root\n');
 });
 
 test('storage: copy/move tidak menimpa tujuan yang sudah ada', async () => {

@@ -76,7 +76,7 @@ Semua frame adalah JSON dengan bentuk `{ "type": "...", "data": { ... } }`
 | `SENSOR` | Snapshot ESP32 (`online`, `esp`, `battery`, `current`, `dht`, `aux`, `relays`, `alerts`, `history`) |
 | `DOOR` | Snapshot pintu (`configured`, `online`, `open`, `left`, `enabled`, `openSec`, `synced`, `enroll`, `cards`, `log`) |
 | `DOOR_NOTE` | `{ "type": "DOOR_NOTE", "k": "<kunci i18n>", "level": "info\|warn\|error", "text": "..." }` |
-| `SYSTEM` | CPU/RAM/flash (`t`, `cpu`, `ram`, `flash`, `cores`, `load`, `uptime`, `unavailable`) tiap ±2 detik |
+| `SYSTEM` | CPU/RAM/flash (`t`, `cpu`, `ram`, `flash`, `cores`, `load`, `uptime`, `source`, `unavailable`) tiap ±2 detik; snapshot terakhir juga dikirim saat koneksi baru dibuka |
 | `FW` | Progres OTA: `{ "device": "esp32\|esp8266", "phase": "send\|reboot\|done\|error", "message": "..." }` |
 | `UPDATE` | Status pemeriksa update GitHub (`installedCommit`, `latestCommit`, `commits`, …) |
 | `STORAGE` | Perubahan status penyimpanan (bila ada) |

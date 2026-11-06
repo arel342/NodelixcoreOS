@@ -323,6 +323,41 @@ test('integrasi: WebSocket menerima cookie & Bearer, menolak tanpa kredensial', 
     assert.ok(['SENSOR', 'DOOR', 'DEVICE_COUNT', 'UPDATE', 'SYSTEM'].includes(withCookie));
 });
 
+test('integrasi: monitor CPU/RAM berjalan — dashboard menerima SYSTEM berisi angka', async () => {
+    const login = await post('/api/login', ADMIN);
+    const cookie = String(login.headers.get('set-cookie')).split(';')[0];
+    const frame = await new Promise((resolve, reject) => {
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Cookie: cookie } });
+        ws.on('message', m => {
+            const f = JSON.parse(String(m));
+            if (f.type === 'SYSTEM' && f.data && f.data.cpu != null && f.data.ram) { ws.close(); resolve(f.data); }
+        });
+        ws.on('error', reject);
+        setTimeout(() => { try { ws.close(); } catch { } resolve(null); }, 6000);
+    });
+    assert.ok(frame, 'pesan SYSTEM dengan CPU & RAM harus diterima (bukan N/A)');
+    assert.ok(frame.cpu >= 0 && frame.cpu <= 100, 'cpu ' + frame.cpu);
+    assert.ok(frame.ram.total > 0 && frame.ram.pct >= 0 && frame.ram.pct <= 100);
+    assert.ok(frame.cores > 0);
+    const api = await req('/api/system', { headers: { Cookie: cookie } });
+    assert.equal(api.status, 200);
+    assert.ok(api.body.snapshot && typeof api.body.snapshot.cpu === 'number');
+    assert.ok(api.body.history.length >= 1);
+});
+
+test('integrasi: server.js meneruskan semua fungsi auth yang dipakai settings.js & setup.js', () => {
+    const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
+    const m = /const authDeps = \{([\s\S]*?)\n\};/.exec(server) || /const authDeps = \{([^}]*)\}/.exec(server);
+    assert.ok(m, 'authDeps ditemukan');
+    const keys = new Set([...m[1].matchAll(/(?:^|[\s,{])([A-Za-z_$][\w$]*)\s*(?=[:,]|$)/gm)].map(x => x[1]));
+    for (const file of ['settings.js', 'setup.js', 'ai.js']) {
+        const src = fs.readFileSync(path.join(ROOT, file), 'utf8');
+        for (const [, fn] of src.matchAll(/\bauth\.([A-Za-z_$][\w$]*)\s*\(/g)) {
+            assert.ok(keys.has(fn), `${file} memanggil auth.${fn}() tetapi server.js tidak meneruskannya`);
+        }
+    }
+});
+
 test('integrasi: restart server -> Bearer tetap berlaku, cookie web lama tidak', async () => {
     const token = await mobileLogin();
     const login = await post('/api/login', ADMIN);

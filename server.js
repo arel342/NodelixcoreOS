@@ -461,7 +461,12 @@ function setWebEnabled(enabled) {
 // ================= AI AGENT =================
 // ai.js adalah implementasi utama. Alias agent.js/ai-agent.js/ai_agent.js/gemini.js
 // hanya me-re-export modul ini.
-const authDeps = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly, resolve: auth.resolve };
+// revokeAllMobileSessions wajib ada: settings.js & setup.js memanggilnya saat password
+// admin diganti. Tanpa ini, ganti password dari web gagal (TypeError -> HTTP 500).
+const authDeps = {
+    isAuthed, verify: verifyDashboardPassword, createSession, keepOnly, resolve: auth.resolve,
+    revokeAllMobileSessions: reason => auth.revokeAllMobileSessions(reason)
+};
 const ai = require('./ai')({
     app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, executor, auth: authDeps,
     broadcast, notify, registry, confirm, audit, sensorHistory, optional,
@@ -523,6 +528,9 @@ wss.on('connection', ws => {
     broadcast({ type: 'DEVICE_COUNT', count: wss.clients.size });
     ws.send(JSON.stringify({ type: 'SENSOR', data: esp32.snapshot() }));
     ws.send(JSON.stringify({ type: 'DOOR', data: door.snapshot() }));
+    // Snapshot CPU/RAM terakhir langsung dikirim supaya tab Sistem tidak kosong
+    // menunggu siklus polling berikutnya.
+    try { const snap = system.snapshot(); if (snap) ws.send(JSON.stringify({ type: 'SYSTEM', data: snap })); } catch { }
     // Status update tersimpan dikirim ke setiap perangkat yang terhubung — tanpa
     // menyentuh GitHub, jadi login/muat ulang dashboard tidak memicu pemeriksaan baru.
     try { ws.send(JSON.stringify({ type: 'UPDATE', data: updater.view() })); } catch { }

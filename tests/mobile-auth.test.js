@@ -687,7 +687,9 @@ test('websocket: pencabutan semua sesi mobile menutup seluruh koneksi (4403)', a
         const b = await connect(cfg.wsBase, { Authorization: `Bearer ${loginB.verify.body.sessionToken}` });
         const closedA = new Promise(resolve => a.ws.on('close', code => resolve(code)));
         const closedB = new Promise(resolve => b.ws.on('close', code => resolve(code)));
-        assert.equal(cfg.auth.revokeAllMobileSessions('admin_password_changed'), 2);
+        // Tiap perangkat punya 2 sesi: satu dari register, satu dari login ECDSA
+        // (MOBILE_MAX_SESSIONS_PER_DEVICE mengizinkan beberapa sesi) -> 2 perangkat = 4 sesi.
+        assert.equal(cfg.auth.revokeAllMobileSessions('admin_password_changed'), 4);
         const [codeA, codeB] = await Promise.all([
             Promise.race([closedA, new Promise(r => setTimeout(() => r('timeout'), 2000))]),
             Promise.race([closedB, new Promise(r => setTimeout(() => r('timeout'), 2000))])
