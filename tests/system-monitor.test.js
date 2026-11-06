@@ -110,3 +110,47 @@ test('/api/system mengembalikan snapshot dan riwayat', async () => {
     assert.ok(Array.isArray(body.history) && body.history.length === 1);
     assert.strictEqual(typeof body.history[0].cpu, 'number');
 });
+
+test('simulasi Android 13 + root: /proc/stat EACCES, os.cpus() kosong -> CPU via shell su persisten', async () => {
+    const fs = require('fs'), path = require('path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ndlx-android-'));
+    const countFile = path.join(dir, 'su-calls');
+    const su = path.join(dir, 'su');
+    // "su" palsu: mencatat tiap pemanggilan, lalu menjadi shell (seperti Magisk).
+    fs.writeFileSync(su, `#!/bin/sh\necho x >> '${countFile}'\nif [ "$1" = "-c" ]; then exec /bin/sh -c "$2"; fi\nexec /bin/sh\n`, { mode: 0o755 });
+    const realCpus = os.cpus;
+    os.cpus = () => [];                       // perilaku Node di Termux Android 8+
+    const msgs = [];
+    const mon = systemFactory({
+        app: fakeApp(), broadcast: m => msgs.push(m.data),
+        storage: { MODE: 'root', SU: su, status: async () => ({ ready: true, total: 1000, free: 500, root: '/x' }) },
+        readFile(p) {
+            if (p === '/proc/stat') { const e = new Error('EACCES: permission denied'); e.code = 'EACCES'; throw e; }
+            return fs.readFileSync(p, 'utf8');
+        }
+    });
+    try {
+        mon.start();
+        const ok = await (async () => {
+            for (let i = 0; i < 100; i++) {
+                if (msgs.some(d => d.source.cpu === 'proc' && typeof d.cpu === 'number')) return true;
+                await new Promise(r => setTimeout(r, 100));
+            }
+            return false;
+        })();
+        assert.ok(ok, 'CPU harus terbaca lewat root: ' + JSON.stringify(msgs.slice(-1)));
+        const d = msgs.filter(m => m.source.cpu === 'proc').pop();
+        assert.ok(d.cpu >= 0 && d.cpu <= 100);
+        assert.ok(d.cores > 0, 'jumlah core dihitung dari /proc/stat walau os.cpus() kosong');
+        assert.ok(d.ram && d.ram.total > 0);
+        assert.deepStrictEqual(d.unavailable, []);
+        // Tunggu beberapa siklus lagi: su TIDAK boleh dibuka ulang tiap sampel.
+        await new Promise(r => setTimeout(r, 2500));
+        const calls = fs.readFileSync(countFile, 'utf8').trim().split('\n').length;
+        assert.strictEqual(calls, 1, 'su dibuka ' + calls + ' kali');
+    } finally {
+        mon.stop();
+        os.cpus = realCpus;
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});

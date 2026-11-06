@@ -1,11 +1,13 @@
 // Monitor CPU, RAM, dan flash disk perangkat server (termasuk Android/Termux).
-// Prioritas: /proc (lebih akurat pada Linux), lalu /proc lewat su (Android yang
-// membatasi /proc/stat untuk aplikasi), lalu API os bawaan Node.js, dan terakhir
-// estimasi dari load average. Data dikirim lewat WebSocket {type:'SYSTEM'} dan
+// Prioritas: /proc (lebih akurat pada Linux), lalu /proc lewat root (Android 8+ /
+// Android 13 memblokir /proc/stat untuk aplikasi seperti Termux), lalu API os bawaan
+// Node.js, dan terakhir estimasi dari load average. Akses root memakai SATU shell su
+// persisten (root-shell.js) supaya Magisk/KernelSU tidak memunculkan toast tiap 2 detik. Data dikirim lewat WebSocket {type:'SYSTEM'} dan
 // riwayat tersedia di /api/system.
 const fs = require('fs');
 const os = require('os');
 const { spawn } = require('child_process');
+const { createRootShell } = require('./root-shell');
 
 const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 const pollValue = Number(E('SYSTEM_POLL_MS', 2000));
@@ -111,28 +113,28 @@ function createSystemMonitor({ app, broadcast, storage: storageOverride, readFil
         };
     }
 
-    // ---------- Sumber 2: /proc lewat su (hanya mode root) ----------
+    // ---------- Sumber 2: /proc lewat root (hanya mode root, mis. Android 13 + Magisk) ----------
     let suFails = 0, suPausedUntil = 0;
-    function defaultRunSu(cmd) {
-        return new Promise(resolve => {
-            let out = '';
-            let settled = false;
-            let child;
-            const finish = value => { if (settled) return; settled = true; clearTimeout(timer); resolve(value); };
-            const timer = setTimeout(() => { try { child && child.kill('SIGKILL'); } catch { } finish(null); }, 4000);
-            try { child = spawn(getStorage().SU, ['-c', cmd], { stdio: ['ignore', 'pipe', 'ignore'] }); }
-            catch { return finish(null); }
-            child.stdout.setEncoding('utf8');
-            child.stdout.on('data', chunk => { if (out.length < 32768) out += chunk; });
-            child.on('error', () => finish(null));
-            child.on('close', code => finish(code === 0 ? out : null));
-        });
-    }
+    let rootShell = null;
+    const getRootShell = () => rootShell || (rootShell = createRootShell({
+        bin: getStorage().SU,
+        log: m => { try { console.log(m); } catch { } }
+    }));
+    const SU_CMD = "grep '^cpu' /proc/stat; echo '==='; grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached|SReclaimable|Shmem):' /proc/meminfo";
     async function readProcSu() {
         if (!useSu() || Date.now() < suPausedUntil) return null;
-        const cmd = "head -n 64 /proc/stat; echo '==='; grep -E '^(MemTotal|MemAvailable|MemFree|Buffers|Cached|SReclaimable|Shmem):' /proc/meminfo";
-        let parsed = null;
-        try { parsed = splitSuOutput(await (runSu || defaultRunSu)(cmd)); } catch { parsed = null; }
+        let out = null;
+        try {
+            if (runSu) out = await runSu(SU_CMD);
+            else {
+                const sh = getRootShell();
+                // Shell root belum siap (mis. dialog izin Magisk masih terbuka): jangan
+                // menunggu — mulai di latar belakang dan pakai fallback untuk sampel ini.
+                if (!sh.ready() && sh.mode() !== 'oneshot') { sh.warmUp(); return null; }
+                out = await sh.exec(SU_CMD);
+            }
+        } catch { out = null; }
+        const parsed = splitSuOutput(out);
         if (!parsed || !/^cpu\s/m.test(parsed.stat)) {
             if (++suFails >= SU_FAIL_MAX) { suFails = 0; suPausedUntil = Date.now() + SU_BACKOFF_MS; }
             return null;
@@ -149,6 +151,38 @@ function createSystemMonitor({ app, broadcast, storage: storageOverride, readFil
             stat: direct.stat || (viaSu && viaSu.stat) || null,
             mem: direct.mem || (viaSu && viaSu.mem) || null
         };
+    }
+
+    // ---------- Nama chipset (Android: os.cpus() sering kosong) ----------
+    let deviceModel = '', modelTried = false;
+    const isAndroid = () => process.platform === 'android' || fs.existsSync('/system/build.prop');
+    function getprop(key) {
+        return new Promise(resolve => {
+            let out = '', c, done = false;
+            const finish = v => { if (done) return; done = true; clearTimeout(t); resolve(v); };
+            const t = setTimeout(() => { try { c && c.kill('SIGKILL'); } catch { } finish(''); }, 2000);
+            try { c = spawn('getprop', [key], { stdio: ['ignore', 'pipe', 'ignore'] }); } catch { return finish(''); }
+            c.stdout.setEncoding('utf8');
+            c.stdout.on('data', d => { if (out.length < 256) out += d; });
+            c.on('error', () => finish(''));
+            c.on('close', () => finish(out.trim()));
+        });
+    }
+    async function detectModel() {
+        if (modelTried) return;
+        modelTried = true;
+        try {
+            if (isAndroid()) {
+                const [maker, soc, platform] = await Promise.all(['ro.soc.manufacturer', 'ro.soc.model', 'ro.board.platform'].map(getprop));
+                const name = [maker, soc].filter(Boolean).join(' ') || platform;
+                if (name) { deviceModel = name.slice(0, 80); return; }
+            }
+        } catch { }
+        try {
+            const info = String(read('/proc/cpuinfo') || '');
+            const m = /^(?:Hardware|model name|cpu model)\s*:\s*(.+)$/mi.exec(info);
+            if (m && m[1].trim()) deviceModel = m[1].trim().slice(0, 80);
+        } catch { }
     }
 
     // ---------- CPU ----------
@@ -253,7 +287,10 @@ function createSystemMonitor({ app, broadcast, storage: storageOverride, readFil
             const again = await readCpuRam();
             r = { ...again, ram: again.ram || r.ram, ramSource: again.ram ? again.ramSource : r.ramSource };
         }
-        const { cores, model } = countCores(r.proc.stat);
+        const cc = countCores(r.proc.stat);
+        const cores = cc.cores;
+        if (!cc.model) detectModel();
+        const model = cc.model || deviceModel;
         let { cpu, cpuSource } = r;
         if (cpu == null) {
             cpu = cpuPctFromLoad(cores);
@@ -320,6 +357,7 @@ function createSystemMonitor({ app, broadcast, storage: storageOverride, readFil
 
     function stop() {
         running = false;
+        if (rootShell) { try { rootShell.close(); } catch { } rootShell = null; }
         generation++;
         clearTimeout(timer);
         timer = null;

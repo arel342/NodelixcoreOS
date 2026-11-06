@@ -16,7 +16,7 @@ let dev = DEVICE, ROOT = DEVICE ? DEVICE + '/' + FOLDER : '', mountRequired = is
 // root = lewat su | direct = tanpa su (node sudah root, atau folder biasa)
 const MODE = E('STORAGE_MODE', (process.getuid && process.getuid() === 0) ? 'direct' : 'root');
 const PREFIX = process.env.PREFIX || '/data/data/com.termux/files/usr';
-const SU = E('SU_BIN', ['/system/bin/su', '/system/xbin/su', '/sbin/su', '/su/bin/su'].find(p => fs.existsSync(p)) || 'su');
+const SU = E('SU_BIN', ['/system/bin/su', '/system/xbin/su', '/sbin/su', '/debug_ramdisk/su', '/su/bin/su'].find(p => fs.existsSync(p)) || 'su');
 const ZIP = E('ZIP_BIN', fs.existsSync(PREFIX + '/bin/zip') ? PREFIX + '/bin/zip' : 'zip');
 
 // File yang sudah terkompresi hanya disimpan (store) supaya CPU HP tidak terbuang; sisanya deflate cepat (-1)

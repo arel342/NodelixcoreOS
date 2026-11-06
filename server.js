@@ -461,7 +461,12 @@ function setWebEnabled(enabled) {
 // ================= AI AGENT =================
 // ai.js adalah implementasi utama. Alias agent.js/ai-agent.js/ai_agent.js/gemini.js
 // hanya me-re-export modul ini.
-const authDeps = { isAuthed, verify: verifyDashboardPassword, createSession, keepOnly, resolve: auth.resolve };
+// revokeAllMobileSessions wajib ada: settings.js & setup.js memanggilnya saat password
+// admin diganti. Tanpa ini, ganti password dari web gagal (TypeError -> HTTP 500).
+const authDeps = {
+    isAuthed, verify: verifyDashboardPassword, createSession, keepOnly, resolve: auth.resolve,
+    revokeAllMobileSessions: reason => auth.revokeAllMobileSessions(reason)
+};
 const ai = require('./ai')({
     app, saveEnv, esp32, door, telegram: null, terminal: terminalMod, executor, auth: authDeps,
     broadcast, notify, registry, confirm, audit, sensorHistory, optional,

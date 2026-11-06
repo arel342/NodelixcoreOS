@@ -210,6 +210,17 @@ Untuk akses storage Android:
 termux-setup-storage
 ```
 
+### Monitor CPU/RAM di Android ber-root (Android 8–14, termasuk Android 13)
+
+Android memblokir `/proc/stat` untuk aplikasi biasa seperti Termux, jadi CPU dibaca lewat root:
+
+* Saat server pertama jalan, Magisk/KernelSU menampilkan dialog izin untuk **Termux** — pilih **Grant/Izinkan**
+  (sebaiknya "Selamanya"). Selama dialog belum dijawab, RAM tetap tampil dan CPU memakai estimasi load average.
+* Server membuka **satu** shell `su` persisten (bukan `su -c` tiap 2 detik), jadi tidak ada toast
+  "Superuser granted" berulang. Jika `su` tidak mendukung mode ini, otomatis beralih ke `su -c`.
+* Lokasi `su` dideteksi otomatis (`/system/bin/su`, `/debug_ramdisk/su`, …); bisa dipaksa lewat `SU_BIN=` di `.env`.
+* Kalau node dijalankan langsung sebagai root (`STORAGE_MODE=direct`), `/proc` dibaca langsung tanpa `su`.
+
 Clone repository:
 
 ```bash
