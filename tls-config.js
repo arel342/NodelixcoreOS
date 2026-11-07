@@ -104,6 +104,13 @@ function loadTlsOptions(env = (key, fallback) => process.env[key] || fallback, n
     if (serverCert.issuer !== rootCert.subject || !serverCert.verify(rootCert.publicKey)) {
         throw configurationError('Sertifikat server tidak diterbitkan langsung oleh Root CA yang dikonfigurasi.');
     }
+    if (serverCert.ca) {
+        throw configurationError('Sertifikat server harus berupa leaf certificate, bukan sertifikat CA.');
+    }
+    const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
+    if (!Array.isArray(serverCert.keyUsage) || !serverCert.keyUsage.includes(SERVER_AUTH_EKU)) {
+        throw configurationError('Extended Key Usage sertifikat server wajib memuat serverAuth.');
+    }
     if (!serverCert.subjectAltName) {
         throw configurationError('Sertifikat server wajib memiliki Subject Alternative Name (SAN).');
     }
