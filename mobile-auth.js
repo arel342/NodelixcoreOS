@@ -146,7 +146,8 @@ module.exports = function createMobileAuth({
     dataDir = path.join(__dirname, 'data'),
     log = () => { },
     verifyAdminPassword = null,     // dari server.js: cek password admin + batas percobaan
-    clock = Date.now
+    clock = Date.now,
+    onEvent = () => { }             // callback keamanan: (event, details) -> security-log
 } = {}) {
     if (!app) throw new Error('mobile-auth: app wajib');
     if (!auth) throw new Error('mobile-auth: modul auth wajib');
@@ -350,6 +351,8 @@ module.exports = function createMobileAuth({
 
         noStore(res);
         log(`[Mobile] perangkat terdaftar: ${deviceId} (${record.deviceName || 'tanpa nama'}), sesi lama dicabut: ${revoked}`);
+        try { onEvent('mobile_register', { deviceId, ip: req.ip || 'unknown' }); } catch { }
+        if (revoked) { try { onEvent('session_revoked', { deviceId, reason: 're_registered' }); } catch { } }
         return res.json({
             ...sessionPayload(sess, 'Device registered'),
             status: 'ACTIVE',
@@ -516,6 +519,7 @@ module.exports = function createMobileAuth({
         const token = auth.bearerOf(req);
         const revoked = token ? auth.revokeToken(token) : false;
         noStore(res);
+        if (revoked) { try { onEvent('session_revoked', { deviceId: null, reason: 'logout' }); } catch { } }
         return res.json({ success: true, revoked, message: revoked ? 'Logged out' : 'No active mobile session' });
     }
 
@@ -574,6 +578,7 @@ module.exports = function createMobileAuth({
 
         noStore(res);
         log(`[Mobile] perangkat dicabut: ${deviceId} (sesi dicabut: ${sessionsRevoked})`);
+        try { onEvent('mobile_revoke', { deviceId, reason: 'device_revoked' }); } catch { }
         return res.json({
             success: true,
             deviceId,

@@ -42,6 +42,7 @@ const boundedMs = (key, fallback, min, max) => {
     const n = Number(env(key, fallback));
     return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
 };
+const boundedInt = (key, fallback, min, max) => boundedMs(key, fallback, min, max);
 const REQUEST_TIMEOUT = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
 const HEADERS_TIMEOUT = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), REQUEST_TIMEOUT);
 const KEEP_ALIVE_TIMEOUT = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
@@ -72,8 +73,18 @@ const auth = authMod({ env, dataDir: path.join(__dirname, 'data'), log: m => con
 const { createLimiter, same } = authMod;
 const { sidOf, createSession, keepOnly, requireAuth, isAuthed, bearerOf } = auth;
 const loginLimiter = createLimiter({ max: 5, blockMs: 5 * 60 * 1000 });
+// Batas umum API per IP per endpoint (antisipasi scanning/bot): default 120 req/menit.
+const apiLimiter = createLimiter({ max: boundedInt('RATE_LIMIT_API_MAX', 120, 10, 600), blockMs: 60 * 1000 });
 
 setInterval(auth.flush, 60000).unref();
+
+// ================= PENCATATAN AUDIT KEAMANAN =================
+// security-log.js mencatat peristiwa keamanan (login, register, revok, denied,
+// WS auth fail, traversal, command) ke data/security.log (JSON Lines, dirotasi).
+// TIDAK MENCATAT password/token/kunci.
+const { createSecurityLog } = require('./security-log');
+const secLog = createSecurityLog({ quiet: true });
+secLog.flush().catch(() => { });
 
 // ================= HEADER KEAMANAN =================
 // Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
@@ -202,6 +213,7 @@ server.httpServer.on('upgrade', (req, socket, head) => {
 
     const r = auth.resolve(req);
     if (!r.ok) {
+        secLog.wsAuthFail(String(req.ip || (req.socket && req.socket.remoteAddress) || 'unknown'), r.reason || 'no_auth');
         const body = '{"success":false,"message":"Authentication required."}';
         try {
             socket.write(
@@ -296,10 +308,27 @@ const PUBLIC_API = [
 ];
 app.use((req, res, next) => {
     const p = req.path;
-    if (p === '/uploads' || p.startsWith('/uploads/')) return requireAuth(req, res, next);
+    // /uploads wajib login (terpisah dari gerbang /api).
+    if (p === '/uploads' || p.startsWith('/uploads/')) {
+        const denied = requireAuth(req, res, next);
+        if (denied && res.statusCode === 401) secLog.apiDenied(req.ip, p, 'uploads_no_auth');
+        return denied;
+    }
     if (p !== '/api' && !p.startsWith('/api/')) return next();
+    // Rate limit umum per IP per endpoint (tidak berlaku untuk endpoint publik
+    // yang sudah punya limiter sendiri: login/otp).
+    if (!/^\/api\/(login|request-otp|verify-otp|reset-password)$/.test(p)) {
+        const lim = apiLimiter.check(req.ip + '|' + p);
+        if (lim.blocked) {
+            secLog.rateLimited(req.ip, p);
+            return res.status(429).json({ success: false, message: T('auth.tooMany') });
+        }
+        apiLimiter.hit(req.ip + '|' + p);
+    }
     if (PUBLIC_API.some(rx => rx.test(p))) return next();
-    return requireAuth(req, res, next);
+    const denied = requireAuth(req, res, next);
+    if (denied && (res.statusCode === 401 || res.statusCode === 400)) secLog.apiDenied(req.ip, p, 'api_no_auth');
+    return denied;
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -314,9 +343,11 @@ app.post('/api/login', (req, res) => {
     const ok = same(username, env('ADMIN_USERNAME', 'admin')) & same(password, env('ADMIN_PASSWORD'));
     if (!ok || !env('ADMIN_PASSWORD')) {
         loginLimiter.fail(req.ip);
+        secLog.loginFail(req.ip, String(username).slice(0, 32) || '-', 'wrong_credentials');
         return res.status(401).json({ success: false, message: T('auth.wrong') });
     }
     loginLimiter.reset(req.ip);
+    secLog.loginSuccess(req.ip, String(username).slice(0, 32));
     createSession(res, { secure: !!req.secure });
     res.json({ success: true, message: T('auth.loginOk') });
 });
@@ -534,6 +565,7 @@ const settings = require('./settings')({ app, saveEnv, esp32, door, telegram, ai
 const mobileAuth = require('./mobile-auth')({
     app, env, auth, dataDir: path.join(__dirname, 'data'),
     verifyAdminPassword: verifyDashboardPassword,
+    onEvent: (event, details) => { try { secLog.write(event, details); } catch { } },
     log: m => console.log(m)
 });
 
@@ -581,7 +613,13 @@ function uploadGate(req, res, next) {
 }
 const wrap = fn => async (req, res) => {
     try { await fn(req, res); }
-    catch (e) { if (!res.headersSent) res.status(e.status || 500).json({ error: e.message }); else res.destroy(); }
+    catch (e) {
+        // Log upaya path traversal / akses ditolak ke audit keamanan.
+        if (e && (e.code === 'PATH_DENIED' || e.code === 'PATH_ESCAPE' || /traversal|keluar dari folder/i.test(e.message || ''))) {
+            secLog.pathTraversal(req.ip, req.path, String(e.message || '').slice(0, 80));
+        }
+        if (!res.headersSent) res.status(e.status || 500).json({ error: e.message }); else res.destroy();
+    }
 };
 
 app.get('/api/storage/status', wrap(async (req, res) => res.json(await storage.status())));
@@ -784,6 +822,61 @@ function printBanner() {
     console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-3.5-flash-lite') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
     storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
     console.log('=================================');
+}
+
+// ================= VALIDASI KONFIGURASI KEAMANAN DI STARTUP =================
+// Tolak konfigurasi yang membahayakan keamanan sebelum server mulai mendengarkan.
+function validateSecurityConfig() {
+    const errors = [];
+
+    // 1. TLS harus aktif (atau HTTP eksplisit diizinkan untuk rollback terkendali).
+    const tlsEnabled = String(env('TLS_ENABLED', 'true')).toLowerCase() !== 'false';
+    if (!tlsEnabled && String(env('TLS_ALLOW_HTTP', 'false')).toLowerCase() !== 'true') {
+        errors.push('TLS_ENABLED=false tetapi TLS_ALLOW_HTTP tidak aktif — server tidak boleh berjalan HTTP terbuka tanpa perlindungan.');
+    }
+
+    // 2. Password admin harus cukup panjang.
+    const pwd = env('ADMIN_PASSWORD', '');
+    if (pwd && pwd.length < 8) {
+        errors.push('ADMIN_PASSWORD terlalu pendek (minimal 8 karakter).');
+    }
+
+    // 3. TRUST_PROXY=true tidak boleh dipakai (membuka spoofing).
+    if (String(env('TRUST_PROXY', '')).toLowerCase() === 'true') {
+        errors.push('TRUST_PROXY=true tidak aman dan akan diabaikan. Gunakan daftar IP/CIDR proxy tepercaya.');
+    }
+
+    // 4. SESSION_TTL tidak boleh terlalu panjang tanpa batas.
+    const ttl = Number(env('SESSION_TTL_HOURS', '12'));
+    if (Number.isFinite(ttl) && ttl > 720) {
+        errors.push('SESSION_TTL_HOURS=' + ttl + ' terlalu panjang (maks 720 jam / 30 hari).');
+    }
+
+    // 5. MOBILE_SESSION_TTL tidak boleh terlalu panjang.
+    const mTtl = Number(env('MOBILE_SESSION_TTL_HOURS', '720'));
+    if (Number.isFinite(mTtl) && mTtl > 720) {
+        errors.push('MOBILE_SESSION_TTL_HOURS=' + mTtl + ' terlalu panjang (maks 720 jam / 30 hari).');
+    }
+
+    // 6. TLS_ALLOW_NO_SAN harus eksplisit true (tidak direkomendasikan).
+    if (String(env('TLS_ALLOW_NO_SAN', 'false')).toLowerCase() === 'true') {
+        console.warn('[Security] TLS_ALLOW_NO_SAN=true — sertifikat tanpa SAN diizinkan (tidak direkomendasikan).');
+    }
+
+    if (errors.length) {
+        console.error('[Security] Validasi konfigurasi gagal:');
+        for (const e of errors) console.error('  - ' + e);
+        throw new Error('Konfigurasi keamanan tidak valid. Perbaiki .env sebelum menjalankan server.');
+    }
+    if (tlsEnabled) {
+        console.log('[Security] Validasi konfigurasi keamanan: OK (TLS aktif, password admin memenuhi syarat).');
+    }
+}
+
+try { validateSecurityConfig(); }
+catch (e) {
+    console.error(e.message);
+    process.exit(1);
 }
 
 setWebEnabled(true).then(() => {
