@@ -43,8 +43,7 @@ npm start
 
 Buka `https://<hostname-LAN>:3000/setup.html` di browser pada jaringan yang diizinkan. Node.js minimal **18.17** dan OpenSSL harus tersedia.
 
-Tanpa `.env`, server tetap berjalan pada mode setup: semua API ditutup sampai akun
-admin dibuat.
+Setelah TLS dan allowlist LAN dikonfigurasi, jika `ADMIN_PASSWORD` belum diisi server menampilkan wizard setup melalui HTTPS. Tanpa konfigurasi TLS, server menolak startup dan tidak menyediakan halaman setup HTTP.
 
 ---
 
