@@ -84,3 +84,5 @@ data/update-state.json
 data/update-state.json.tmp
 data/audit.log
 data/audit.log.*
+data/security.log
+data/security.log.*
