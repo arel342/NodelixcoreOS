@@ -190,7 +190,7 @@ auth.setRevokeHandler(closeSocketsFor);
 
 server.on('upgrade', (req, socket, head) => {
     if (!networkGuard.isAllowed(req.socket && req.socket.remoteAddress)) {
-        try { socket.write('HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+        try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch { }
         return socket.destroy();
     }
     // Origin browser harus same-origin HTTPS. Klien native boleh tidak mengirim Origin.
@@ -207,7 +207,7 @@ server.on('upgrade', (req, socket, head) => {
             allowedOrigin = sameOrigin || (parsedOrigin.protocol === 'https:' && explicitlyTrusted);
         } catch { allowedOrigin = false; }
         if (!allowedOrigin) {
-            try { socket.write('HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+            try { socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch { }
             return socket.destroy();
         }
     }
