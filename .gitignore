@@ -80,6 +80,10 @@ data/audit.log.*
 # Local TLS material (never commit private keys, CSRs, or runtime certificates)
 /certs/
 *.key
+*.pem
+*.crt
+*.cer
+*.der
 *.csr
 *.srl
 *.p12
