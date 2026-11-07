@@ -9,6 +9,7 @@ Berlaku untuk NodelixcoreOS **1.2.0** (penambahan autentikasi mobile) dan seteru
 | Data | Lokasi | Boleh hilang? |
 |---|---|---|
 | Konfigurasi | `.env` (root project) | **Tidak** — jangan ditimpa |
+| CA & sertifikat HTTPS | `data/ca/` dan `data/certs/` | **Tidak** — jangan dihapus; CA yang sama mempertahankan kepercayaan klien |
 | Akun admin | `ADMIN_USERNAME` / `ADMIN_PASSWORD` di `.env` | **Tidak** |
 | Data pintu & kartu RFID | `data/door.json` | **Tidak** |
 | Kalibrasi PLTS | `data/calibration.json` | **Tidak** |
