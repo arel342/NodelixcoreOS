@@ -74,7 +74,7 @@ function ensureLocalTls() {
             'IP.1 = 127.0.0.1',
             'IP.2 = ::1',
             ''
-        ].join('\\n');
+        ].join('\n');
         fs.writeFileSync(caLeafConfig, [
             '[ server_cert ]',
             'basicConstraints = critical,CA:TRUE,pathlen:0',
@@ -83,7 +83,7 @@ function ensureLocalTls() {
             'subjectAltName = @alt_names',
             '',
             altNames
-        ].join('\\n'));
+        ].join('\n'));
         fs.writeFileSync(clientOnlyConfig, [
             '[ server_cert ]',
             'basicConstraints = critical,CA:FALSE',
@@ -92,7 +92,7 @@ function ensureLocalTls() {
             'subjectAltName = @alt_names',
             '',
             altNames
-        ].join('\\n'));
+        ].join('\n'));
         for (const [output, ext] of [[caLeafCert, caLeafConfig], [clientOnlyCert, clientOnlyConfig]]) {
             run([
                 'x509', '-req', '-in', csr, '-CA', caCert, '-CAkey', caKey,
