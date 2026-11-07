@@ -109,6 +109,8 @@ test('network allowlist: empty, invalid, and catch-all CIDRs are rejected', () =
     assert.throws(() => createNetworkGuard('not-an-ip/24'), /Alamat IP\/CIDR tidak valid/);
     assert.throws(() => createNetworkGuard('0.0.0.0/0'), /catch-all/);
     assert.throws(() => createNetworkGuard('::/0'), /catch-all/);
+    assert.throws(() => createNetworkGuard('8.8.8.8/32'), /hanya boleh berisi subnet private/);
+    assert.throws(() => createNetworkGuard('2001:4860::/32'), /hanya boleh berisi subnet private/);
     assert.throws(() => parseCidr('192.168.1.1/33'), /Prefix CIDR di luar rentang/);
     assert.equal(parseIp('invalid'), null);
     assert.equal(isAllowed('not-an-ip', [parseCidr('127.0.0.1/32')]), false);
