@@ -127,7 +127,7 @@ NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonceBase64>|<timestampMillis>|<
 - `deviceId`, `challengeId`, `nonce` di-trim.
 - `timestampMillis` = waktu perangkat (epoch ms).
 - `origin` = `scheme://host:port` server seperti yang diketik di aplikasi, huruf kecil,
-  tanpa garis miring di akhir (mis. `http://192.168.1.10:3000`).
+  tanpa garis miring di akhir. Server produksi menggunakan HTTPS, mis. `https://nodelixcoreos.local:3000`.
 
 Contoh Node.js (untuk pengujian/manual):
 
@@ -146,7 +146,7 @@ POST /api/mobile/auth/verify
   "challengeId": "chl_...",
   "timestamp": 1762041612345,
   "signatureBase64": "<DER Base64>",
-  "serverOrigin": "http://192.168.1.10:3000"   // opsional
+  "serverOrigin": "https://nodelixcoreos.local:3000"   // hanya dokumentasi klien; server tidak mempercayai nilai ini
 }
 ```
 
@@ -199,27 +199,17 @@ dapat diperpanjang dengan `POST /api/mobile/auth/refresh` (rotasi token).
 satu server tidak bisa dipakai ulang di server lain. Aplikasi tidak mengirim `origin`
 saat `verify`, sehingga server menyusun kandidat dari:
 
-1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — **disarankan** jika
-   server berada di balik reverse proxy TLS,
-2. `X-Forwarded-Host` / `Host` + `X-Forwarded-Proto`, dalam varian `https://` dan
-   `http://` untuk host yang sama,
-3. `serverOrigin` yang dikirim klien pada body `verify` (bila ada).
+1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — konfigurasi server-side eksplisit,
+2. `Host` + skema transport yang benar-benar diterima socket (`https://` pada listener produksi TLS langsung).
 
-Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat. Nonce tetap
-sekali pakai, sehingga memperluas daftar origin tidak membuka replay.
+`X-Forwarded-*` dan field `serverOrigin` dari klien tidak menjadi sumber kepercayaan. Semua klien produksi harus menandatangani origin HTTPS yang mereka gunakan.
 
-Contoh reverse proxy (Caddy/Nginx) yang meneruskan header:
+Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat server-side. Pada konfigurasi langsung tanpa override, listener HTTPS hanya menghasilkan kandidat HTTPS. Nonce tetap sekali pakai, sehingga memasukkan origin eksplisit tidak membuka replay.
 
-```nginx
-proxy_set_header Host $host:$server_port;
-proxy_set_header X-Forwarded-Host $host:$server_port;
-proxy_set_header X-Forwarded-Proto $scheme;
-```
-
-Atau sederhanakan dengan `.env`:
+Untuk deployment langsung dengan HTTPS Node.js, konfigurasi ini biasanya **dibiarkan kosong**. Isi hanya bila server benar-benar melayani beberapa hostname HTTPS yang valid dan setiap hostname tercantum pada SAN sertifikat. Jangan masukkan origin `http://` pada koneksi TLS; server mengabaikan override HTTP ketika socket terenkripsi.
 
 ```env
-MOBILE_AUTH_SERVER_ORIGIN=https://192.168.1.10:8443
+MOBILE_AUTH_SERVER_ORIGIN=https://nodelixcoreos.local:3000
 ```
 
 ---
@@ -258,7 +248,7 @@ origin).
 | `MOBILE_CHALLENGE_SKEW_MS` | `60000` | Toleransi selisih jam perangkat |
 | `MOBILE_MAX_PENDING_CHALLENGES` | `2000` | Batas challenge tersimpan di memori |
 | `MOBILE_MAX_SESSIONS_PER_DEVICE` | `10` | Batas sesi aktif per perangkat (1–100). Sesi terlama dicabut otomatis saat batas terlampaui |
-| `MOBILE_AUTH_SERVER_ORIGIN` | *(kosong)* | Origin eksplisit (dipisah koma) untuk reverse proxy |
+| `MOBILE_AUTH_SERVER_ORIGIN` | *(kosong)* | Origin HTTPS tambahan yang dinyatakan eksplisit server (hostname harus cocok dengan SAN) |
 | `SESSION_TTL_HOURS` | `12` | Masa berlaku cookie dashboard |
 | `JSON_BODY_LIMIT` | `512kb` | Batas body JSON |
 | `UPLOAD_MAX_MB` | `2048` | Batas satu berkas upload (`0` = tanpa batas) |
@@ -278,9 +268,6 @@ origin).
 | CSRF dari situs lain | Cookie `SameSite=Lax` + penolakan `Origin` lintas host untuk metode non-GET |
 | Clickjacking | `X-Frame-Options: SAMEORIGIN` + `frame-ancestors 'self'` |
 | Path traversal di file manager | Normalisasi + pemeriksaan symlink (sudah ada) |
-| Penyadapan jaringan | **HTTP hanya untuk LAN tepercaya.** Gunakan reverse proxy TLS (`https/wss`) di luar LAN |
+| Penyadapan jaringan | Listener server hanya HTTPS/WSS; validasi CA dan hostname tetap wajib pada klien |
 
-Catatan jujur: server ini **tidak** menyediakan enkripsi transport sendiri. Pada
-Termux/Android, jalankan di belakang Caddy/Nginx dengan sertifikat lokal, atau terima
-risiko penyadapan pada jaringan yang tidak tepercaya. Jangan meneruskan port server ke
-internet tanpa TLS.
+Server Node.js sekarang menyediakan HTTPS/WSS langsung dengan minimum TLS 1.2. Konfigurasikan Private CA dan allowlist subnet LAN sebelum startup. Android harus mempercayai CA publik lokal dan mempertahankan hostname verification. Lihat [panduan HTTPS lokal](LOCAL-HTTPS.md). Jangan meneruskan port server ke internet; server ini ditujukan untuk jaringan lokal.

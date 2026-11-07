@@ -626,7 +626,15 @@ test('websocket: sesi dicabut -> koneksi diputus (4403)', async () => {
 // ---------- Integrasi server.js ----------
 test('server.js: upgrade WebSocket memakai auth.resolve dan menyimpan identitas sesi', () => {
     const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-    assert.match(src, /server\.on\('upgrade'[\s\S]{0,400}auth\.resolve\(req\)/);
+    const upgradeAt = src.indexOf("server.on('upgrade'");
+    const authAt = src.indexOf('auth.resolve(req)', upgradeAt);
+    const handleAt = src.indexOf('wss.handleUpgrade(req', upgradeAt);
+    assert.ok(upgradeAt >= 0 && authAt > upgradeAt && authAt < handleAt,
+        'WebSocket session must be resolved before the WSS upgrade');
+    const networkAt = src.indexOf('networkGuard.isAllowed(req.socket', upgradeAt);
+    assert.ok(networkAt > upgradeAt && networkAt < handleAt,
+        'WebSocket source CIDR must be checked before the WSS upgrade');
+
     assert.match(src, /ws\.auth = r/);
     assert.match(src, /auth\.revalidate\(ws\.auth\)/);
     assert.match(src, /require\('\.\/mobile-auth'\)/);

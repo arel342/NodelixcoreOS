@@ -28,19 +28,22 @@ Berlaku untuk NodelixcoreOS **1.2.0** (penambahan autentikasi mobile) dan seteru
 
 ```bash
 pkg update && pkg upgrade
-pkg install nodejs git
+pkg install nodejs git openssl
 termux-setup-storage          # bila memakai flash disk
 git clone https://github.com/arel342/NodelixcoreOS
 cd NodelixcoreOS
 npm install
+```
+
+Sebelum menjalankan server, ikuti [panduan HTTPS lokal](LOCAL-HTTPS.md) untuk membuat Private CA secara offline, sertifikat server, mengatur `.env`, dan membatasi CIDR LAN. Server sekarang **menolak startup** jika sertifikat/TLS belum dikonfigurasi; tidak ada fallback HTTP. Setelah CA publik dipercaya oleh perangkat klien dan hostname LAN diarahkan ke server:
+
+```bash
 npm start
 ```
 
-Buka `http://<IP-HP>:3000/setup.html` di browser (satu WiFi), ikuti wizard, lalu
-dashboard dapat dipakai. Node.js minimal **18.17** (lihat `engines` di `package.json`).
+Buka `https://<hostname-LAN>:3000/setup.html` di browser pada jaringan yang diizinkan. Node.js minimal **18.17** dan OpenSSL harus tersedia.
 
-Tanpa `.env`, server tetap berjalan pada mode setup: semua API ditutup sampai akun
-admin dibuat.
+Setelah TLS dan allowlist LAN dikonfigurasi, jika `ADMIN_PASSWORD` belum diisi server menampilkan wizard setup melalui HTTPS. Tanpa konfigurasi TLS, server menolak startup dan tidak menyediakan halaman setup HTTP.
 
 ---
 
@@ -108,18 +111,7 @@ menolak dan Anda bisa memutuskan sendiri (`git stash`, commit, atau bandingkan).
 
 ### 3.5 Rollback
 
-```bash
-cd ~/NodelixcoreOS
-git checkout <commit-lama-dari-commit.txt>
-npm install
-cp -a ~/nodelix-backup/.env .
-cp -a ~/nodelix-backup/data/* data/
-npm start
-```
-
-1.1.0 akan mengabaikan `data/mobile-*.json` (tidak dibaca) — tidak ada kerusakan.
-Perangkat mobile yang sudah registrasi di 1.2.0 perlu memakai mode kompatibilitas cookie
-(otomatis) bila server di-rollback.
+Untuk rollback migrasi HTTPS, ikuti prosedur pada [panduan HTTPS lokal](LOCAL-HTTPS.md#10-rollback). **Jangan menjalankan kembali versi HTTP lama pada interface LAN.** Bila konfigurasi TLS tidak dapat dipulihkan, hentikan web service sampai sertifikat dan firewall dapat diperbaiki. Pulihkan `.env`, sertifikat server yang cocok, dan data pengguna dari backup; jangan pulihkan Root CA private key ke server.
 
 ---
 
@@ -159,11 +151,19 @@ berhenti.
 
 ---
 
-## 6. Variabel `.env` baru (opsional)
+## 6. Variabel `.env` untuk HTTPS lokal
 
-Semua memiliki default yang aman; tidak wajib diisi.
+TLS sekarang wajib. Isi path sertifikat, private key server, public Root CA certificate, hostname SAN, dan subnet LAN aktual sebelum menjalankan server. Default allowlist hanya loopback sehingga belum mengizinkan perangkat LAN.
 
 ```env
+# HTTPS lokal (wajib; tidak ada HTTP fallback)
+BIND_HOST=0.0.0.0
+LOCAL_ALLOWED_CIDRS=127.0.0.1/32,::1/128
+TLS_CERT_PATH=./certs/server.crt
+TLS_KEY_PATH=./certs/server.key
+TLS_CA_CERT_PATH=./certs/root-ca.crt
+TLS_SERVER_NAMES=nodelixcoreos.local
+
 # Autentikasi mobile (aktif secara default)
 MOBILE_AUTH_ENABLED=true
 MOBILE_SESSION_TTL_HOURS=720
@@ -190,10 +190,7 @@ TRUST_PROXY=false
 Tambahkan hanya bila perlu mengubah default; nilai yang tidak ada akan memakai default
 di atas.
 
-`TRUST_PROXY=true` membuat rate limit memakai IP klien sebenarnya dari
-`X-Forwarded-For` — jangan diaktifkan bila port server terbuka langsung (header bisa
-dipalsukan). `TRUSTED_ORIGINS` (dipisah koma) menambah origin yang diizinkan untuk
-permintaan non-GET bercookie, berguna bila reverse proxy mengganti header `Host`.
+`TRUST_PROXY` harus tetap `false` untuk TLS langsung pada Node.js. Jika proxy benar-benar dipakai, hanya masukkan IP/CIDR proxy yang tepercaya; jangan menggunakan `true`. `TRUSTED_ORIGINS` (dipisah koma) menambah origin HTTPS eksplisit untuk permintaan non-GET bercookie dan handshake WebSocket. CIDR jaringan server harus diisi dengan subnet LAN yang sebenarnya.
 
 ---
 

@@ -235,25 +235,25 @@ module.exports = function createMobileAuth({
     const verifyLimitDevice = createLimiter({ max: 10, blockMs: 5 * 60 * 1000 });
 
     // ---------- Origin server ----------
-    // Aplikasi menandatangani `profile.baseUrl()` (skema://host:port yang diketik admin).
-    // Server tidak tahu tulisan persisnya, jadi kandidat disusun dari header permintaan
-    // (Host / X-Forwarded-Host / X-Forwarded-Proto) + override MOBILE_AUTH_SERVER_ORIGIN.
+    // Origin signature disusun hanya dari konfigurasi server eksplisit dan Host socket.
+    // X-Forwarded-* dan serverOrigin dari body klien bukan sumber kepercayaan.
     function requestOrigins(req) {
         const out = new Set();
+        const secureTransport = !!(req.socket && req.socket.encrypted);
         for (const o of String(env('MOBILE_AUTH_SERVER_ORIGIN', '')).split(',')) {
             const n = normOrigin(o);
-            if (n) out.add(n);
+            // HTTPS langsung adalah satu-satunya transport produksi; konfigurasi
+            // HTTP lama tidak boleh memperluas origin yang diterima pada socket TLS.
+            if (n && (!secureTransport || n.startsWith('https://'))) out.add(n);
         }
-        // Header X-Forwarded-* tidak pernah menjadi sumber kepercayaan di sini:
-        // nilainya dapat dipalsukan oleh klien kecuali proxy benar-benar dikonfigurasi.
-        // Untuk TLS offload gunakan MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
         const host = String((req.headers && req.headers.host) || '').split(',')[0].trim();
         if (host) {
+            // Ikat tanda tangan pada skema transport yang benar-benar dipakai.
+            // Server produksi hanya menyediakan HTTPS; jangan menerima payload HTTP
+            // seolah-olah berasal dari origin HTTPS yang dipercaya.
             const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
-            for (const p of new Set([proto, 'http', 'https'])) {
-                const n = normOrigin(`${p}://${host}`);
-                if (n) out.add(n);
-            }
+            const n = normOrigin(`${proto}://${host}`);
+            if (n) out.add(n);
         }
         return [...out];
     }

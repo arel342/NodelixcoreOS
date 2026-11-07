@@ -12,16 +12,18 @@ telah diperiksa terhadap kode dan diuji di `tests/`.
 
 ## 1. Dasar
 
+Transport untuk seluruh REST API dan WebSocket server adalah HTTPS/WSS. Server tidak membuka listener HTTP dan tidak memiliki fallback HTTP. Sertifikat CA privat harus dipercaya oleh klien; lihat [panduan HTTPS lokal](LOCAL-HTTPS.md).
+
 | Item | Nilai |
 |---|---|
-| Base URL | `http://<IP-server>:<PORT>` (default `3000`) |
+| Base URL | `https://<hostname-LAN>:<PORT>` (default `3000`; wajib sertifikat CA lokal tepercaya) |
 | Format | JSON (`Content-Type: application/json`), kecuali upload/hasil download |
 | Encoding | UTF-8 |
 | Autentikasi web | Cookie `sid` (`HttpOnly; SameSite=Lax`) |
 | Autentikasi mobile | `Authorization: Bearer <sessionToken>` |
 | Token di URL | **Ditolak** (`400`) — jangan pernah `?token=...` |
 | Gerbang `/api` | **Deny-by-default**: setiap `/api/*` (dan `/uploads/*`) wajib sesi sah, kecuali endpoint publik yang tercantum di bagian 2 (`login`, `logout`, `session`, `settings/lang`, `setup/*`, `mobile/*`, `request-otp`, `verify-otp`, `reset-password`) |
-| Header keamanan | `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN` (dapat dimatikan dengan `ALLOW_IFRAME=true`), HSTS hanya lewat HTTPS |
+| Header keamanan | `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN` (dapat dimatikan dengan `ALLOW_IFRAME=true`), HSTS aktif pada koneksi HTTPS langsung |
 
 ### 1.1 Bentuk respons
 
@@ -76,7 +78,7 @@ Kesalahan pada jalur mobile:
 Contoh:
 
 ```bash
-curl -i -X POST http://192.168.1.10:3000/api/login \
+curl --cacert certs/root-ca.crt -i -X POST https://nodelixcoreos.local:3000/api/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"rahasia"}'
 # HTTP/1.1 200 OK
@@ -169,8 +171,8 @@ Kemungkinan kesalahan:
   "nonce": "<Base64 32 byte>",
   "issuedAt": 1762041600000,
   "expiresAt": 1762041660000,
-  "serverOrigin": "http://192.168.1.10:3000",
-  "originCandidates": 3,
+  "serverOrigin": "https://nodelixcoreos.local:3000",
+  "originCandidates": 1,
   "algorithm": "ECDSA_P256_SHA256",
   "ttlMs": 60000,
   "message": "Challenge issued"
@@ -212,7 +214,7 @@ NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonce>|<timestampMillis>|<origin
   "expiresAt": 1762128000000,
   "deviceId": "ndlx-550e8400-e29b-41d4-a716-446655440000",
   "username": "admin",
-  "origin": "http://192.168.1.10:3000",
+  "origin": "https://nodelixcoreos.local:3000",
   "message": "Authentication successful"
 }
 ```

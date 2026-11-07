@@ -15,11 +15,14 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
+const { ensureLocalTls, httpsFetch } = require('./helpers/local-tls');
+const TEST_TLS = ensureLocalTls();
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN = { username: 'admin', password: 'integrasi-test-123' };
@@ -45,6 +48,7 @@ function startServer(prt) {
             cwd: ROOT,
             env: {
                 ...process.env,
+                ...TEST_TLS.serverEnv,
                 PORT: String(prt),
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
@@ -80,7 +84,7 @@ function startServer(prt) {
 async function waitReady(url) {
     for (let i = 0; i < 60; i++) {
         try {
-            const r = await fetch(url + '/api/session');
+            const r = await httpsFetch(url + '/api/session');
             if (r.ok) return true;
         } catch { }
         await new Promise(r => setTimeout(r, 250));
@@ -101,14 +105,14 @@ async function boot() {
     for (let attempt = 0; attempt < 5; attempt++) {
         port = 20000 + Math.floor(Math.random() * 20000);
         child = await startServer(port);
-        base = `http://127.0.0.1:${port}`;
+        base = `https://127.0.0.1:${port}`;
         try { await waitReady(base); return; }
         catch (e) { await stopServer(child); if (attempt === 4) throw e; }
     }
 }
 
 const req = async (p, opts = {}) => {
-    const r = await fetch(base + p, opts);
+    const r = await httpsFetch(base + p, opts);
     let body = null;
     try { body = await r.json(); } catch { }
     return { status: r.status, body, headers: r.headers };
@@ -162,6 +166,29 @@ after(async () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
+test('transport: HTTP plaintext tidak dilayani pada port HTTPS', async () => {
+    const received = await new Promise(resolve => {
+        const socket = net.connect(port, '127.0.0.1');
+        const chunks = [];
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(Buffer.concat(chunks));
+        };
+        const timer = setTimeout(() => { socket.destroy(); finish(); }, 3000);
+        socket.on('connect', () => {
+            socket.write(`GET /api/session HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
+        });
+        socket.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        socket.on('close', finish);
+        socket.on('error', finish);
+    });
+    assert.equal(received.toString('latin1').startsWith('HTTP/'), false,
+        'port TLS tidak boleh membalas protokol HTTP plaintext');
+});
+
 test('integrasi: server.js berjalan dan API tanpa sesi ditolak 401 JSON', async () => {
     const s = await req('/api/session');
     assert.equal(s.status, 200);
@@ -184,10 +211,10 @@ test('integrasi: login web lama + cookie sid tetap berfungsi', async () => {
     assert.equal(ok.status, 200);
     const cookie = String(ok.headers.get('set-cookie')).split(';')[0];
     assert.match(cookie, /^sid=[a-f0-9]{64}$/);
-    const r = await req('/api/system', { headers: { Cookie: cookie } });
+    const r = await req('/api/system', { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.ok(r.body.now);
-    const session = await req('/api/session', { headers: { Cookie: cookie } });
+    const session = await req('/api/session', { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
     assert.equal(session.body.authenticated, true);
     assert.equal(session.body.method, 'web');
 });
@@ -275,10 +302,10 @@ test('integrasi: ECDSA mobile -> Bearer berlaku di seluruh API lama', async () =
     assert.match(token, /^[a-f0-9]{64}$/);
 
     for (const p of ['/api/system', '/api/settings', '/api/files?dir=', '/api/storage/status', '/api/esp32/status', '/api/door/status', '/api/firmware', '/api/update/status']) {
-        const r = await req(p, { headers: bearer(token) });
+        const r = await req(p, { ca: TEST_TLS.ca, headers: bearer(token) });
         assert.equal(r.status, 200, p);
     }
-    const ses = await req('/api/mobile/auth/session', { headers: bearer(token) });
+    const ses = await req('/api/mobile/auth/session', { ca: TEST_TLS.ca, headers: bearer(token) });
     assert.equal(ses.body.authenticated, true);
     assert.equal(ses.body.deviceId, DEVICE_ID);
     assert.equal(ses.body.deviceStatus, 'ACTIVE');
@@ -290,7 +317,7 @@ test('integrasi: ECDSA mobile -> Bearer berlaku di seluruh API lama', async () =
 
 test('integrasi: WebSocket menerima cookie & Bearer, menolak tanpa kredensial', async () => {
     const anon = await new Promise(resolve => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ca: TEST_TLS.ca });
         ws.on('unexpected-response', (_, r) => resolve(r.statusCode));
         ws.on('open', () => { ws.close(); resolve('open'); });
         ws.on('error', () => resolve('error'));
@@ -299,7 +326,7 @@ test('integrasi: WebSocket menerima cookie & Bearer, menolak tanpa kredensial', 
 
     const token = await mobileLogin();
     const frames = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: bearer(token) });
+        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ca: TEST_TLS.ca, headers: bearer(token) });
         const seen = new Set();
         ws.on('message', m => {
             const f = JSON.parse(String(m));
@@ -316,7 +343,7 @@ test('integrasi: WebSocket menerima cookie & Bearer, menolak tanpa kredensial', 
     const login = await post('/api/login', ADMIN);
     const cookie = String(login.headers.get('set-cookie')).split(';')[0];
     const withCookie = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Cookie: cookie } });
+        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
         ws.on('message', m => { ws.close(); resolve(JSON.parse(String(m)).type); });
         ws.on('error', reject);
     });
@@ -327,7 +354,7 @@ test('integrasi: monitor CPU/RAM berjalan — dashboard menerima SYSTEM berisi a
     const login = await post('/api/login', ADMIN);
     const cookie = String(login.headers.get('set-cookie')).split(';')[0];
     const frame = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers: { Cookie: cookie } });
+        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
         ws.on('message', m => {
             const f = JSON.parse(String(m));
             if (f.type === 'SYSTEM' && f.data && f.data.cpu != null && f.data.ram) { ws.close(); resolve(f.data); }
@@ -339,7 +366,7 @@ test('integrasi: monitor CPU/RAM berjalan — dashboard menerima SYSTEM berisi a
     assert.ok(frame.cpu >= 0 && frame.cpu <= 100, 'cpu ' + frame.cpu);
     assert.ok(frame.ram.total > 0 && frame.ram.pct >= 0 && frame.ram.pct <= 100);
     assert.ok(frame.cores > 0);
-    const api = await req('/api/system', { headers: { Cookie: cookie } });
+    const api = await req('/api/system', { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
     assert.equal(api.status, 200);
     assert.ok(api.body.snapshot && typeof api.body.snapshot.cpu === 'number');
     assert.ok(api.body.history.length >= 1);
@@ -367,10 +394,10 @@ test('integrasi: restart server -> Bearer tetap berlaku, cookie web lama tidak',
     child = await startServer(port);
     await waitReady(base);
 
-    const r = await req('/api/system', { headers: bearer(token) });
+    const r = await req('/api/system', { ca: TEST_TLS.ca, headers: bearer(token) });
     assert.equal(r.status, 200, 'sesi mobile harus bertahan setelah restart');
 
-    const c = await req('/api/system', { headers: { Cookie: cookie } });
+    const c = await req('/api/system', { ca: TEST_TLS.ca, headers: { Cookie: cookie } });
     assert.equal(c.status, 401, 'sesi web memang hanya di memori (perilaku lama, didokumentasikan)');
 
     // Login ulang dashboard tetap memungkinkan.

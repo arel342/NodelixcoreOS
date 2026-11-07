@@ -236,7 +236,7 @@
 
     function cardServer() {
         const v = S.server;
-        const url = (S.info.ips || []).map(ip => `http://${ip}:${S.info.port}`).join('  ·  ');
+        const url = window.location.origin;
         return `
         <div class="cfg-card">
             <div class="cfg-head"><b>${esc(t('cfg.srv'))}</b></div>
