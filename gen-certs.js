@@ -1,218 +1,298 @@
 #!/usr/bin/env node
 'use strict';
-// ============================================================================
-// gen-certs.js — buat Private CA + sertifikat server untuk NodelixcoreOS.
-//
-//   node gen-certs.js                 buat CA + server cert (atau perbarui server)
-//   node gen-certs.js --renew         perbarui server cert saja (CA tetap)
-//   node gen-certs.js --force-ca      buat CA baru (mengganti trust semua klien!)
-//   node gen-certs.js --status        tampilkan status sertifikat
-//   node gen-certs.js --san "DNS:x,IP:y"    tambah/ganti SAN (ditambah deteksi otomatis)
-//
-// Kunci CA root disimpan terpisah (data/ca) dan TIDAK masuk Git (lihat .gitignore).
-// Server hanya menyimpan kunci + sertifikat server (data/certs).
-//
-// Syarat: openssl terpasang (Termux: pkg install openssl).
-// ============================================================================
-const { spawnSync } = require('child_process');
-const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
+// NodelixcoreOS local certificate generator.
+// Pure Node.js built-in crypto/fs. No OpenSSL executable or child process.
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const net = require('node:net');
+const path = require('node:path');
 const tls = require('./tls');
 
-const E = (k, d) => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
+const OID = {
+    SHA256_RSA: '1.2.840.113549.1.1.11', ORG: '2.5.4.10', CN: '2.5.4.3',
+    BASIC: '2.5.29.19', KEY_USAGE: '2.5.29.15', EXT_KEY_USAGE: '2.5.29.37',
+    SAN: '2.5.29.17', SKI: '2.5.29.14', AKI: '2.5.29.35',
+    SERVER_AUTH: '1.3.6.1.5.5.7.3.1'
+};
+const DAY_MS = 86400000;
 
-function run(cmd, args, opts = {}) {
-    const r = spawnSync(cmd, args, { encoding: 'utf8', ...opts });
-    if (r.status !== 0) {
-        const err = (r.stderr || r.stdout || '').trim();
-        throw new Error(`${cmd} gagal (${r.status}): ${err || 'tanpa output'}`);
+function der(tag, value) {
+    const body = Buffer.isBuffer(value) ? value : Buffer.from(value || '');
+    let length;
+    if (body.length < 0x80) length = Buffer.from([body.length]);
+    else {
+        let n = body.length, bytes = [];
+        while (n > 0) { bytes.unshift(n & 255); n = Math.floor(n / 256); }
+        length = Buffer.from([0x80 | bytes.length, ...bytes]);
     }
-    return (r.stdout || '').trim();
+    return Buffer.concat([Buffer.from([tag]), length, body]);
 }
-
+const seq = (...a) => der(0x30, Buffer.concat(a));
+const set = (...a) => der(0x31, Buffer.concat(a));
+function integer(value) {
+    let b = Buffer.isBuffer(value) ? Buffer.from(value) : Buffer.from([value]);
+    while (b.length > 1 && b[0] === 0 && !(b[1] & 0x80)) b = b.subarray(1);
+    if (b[0] & 0x80) b = Buffer.concat([Buffer.from([0]), b]);
+    return der(0x02, b);
+}
+const bool = v => der(0x01, Buffer.from([v ? 255 : 0]));
+const octet = v => der(0x04, v);
+const utf8 = v => der(0x0c, Buffer.from(String(v), 'utf8'));
+const nullDer = () => der(0x05, Buffer.alloc(0));
+const bitString = (v, unused = 0) => der(0x03, Buffer.concat([Buffer.from([unused]), v]));
+function base128(n) {
+    const out = [n % 128]; n = Math.floor(n / 128);
+    while (n > 0) { out.unshift((n % 128) | 128); n = Math.floor(n / 128); }
+    return Buffer.from(out);
+}
+function oid(v) {
+    const a = String(v).split('.').map(Number);
+    if (a.length < 2 || a.some(n => !Number.isSafeInteger(n) || n < 0) || a[0] > 2 || (a[0] < 2 && a[1] > 39)) throw new Error('OID tidak valid: ' + v);
+    return der(0x06, Buffer.concat([base128(a[0] * 40 + a[1]), ...a.slice(2).map(base128)]));
+}
+const sigAlg = () => seq(oid(OID.SHA256_RSA), nullDer());
+function name(cn) {
+    return seq(set(seq(oid(OID.ORG), utf8('NodelixcoreOS'))), set(seq(oid(OID.CN), utf8(cn))));
+}
+function timeDer(value) {
+    const d = new Date(value), y = d.getUTCFullYear();
+    if (!Number.isFinite(d.getTime())) throw new Error('Waktu sertifikat tidak valid.');
+    const p = n => String(n).padStart(2, '0');
+    const tail = p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) + 'Z';
+    return y >= 1950 && y <= 2049
+        ? der(0x17, Buffer.from(p(y % 100) + tail, 'ascii'))
+        : der(0x18, Buffer.from(String(y).padStart(4, '0') + tail, 'ascii'));
+}
+function extension(id, value, critical = false) {
+    return seq(oid(id), ...(critical ? [bool(true)] : []), octet(value));
+}
+function bitField(indices) {
+    const max = Math.max(...indices), count = Math.floor(max / 8) + 1, bytes = Buffer.alloc(count);
+    for (const bit of indices) bytes[Math.floor(bit / 8)] |= 1 << (7 - bit % 8);
+    return bitString(bytes, count * 8 - max - 1);
+}
+function ipBytes(address) {
+    if (net.isIP(address) === 4) return Buffer.from(address.split('.').map(Number));
+    if (net.isIP(address) !== 6) throw new Error('IP SAN tidak valid: ' + address);
+    let s = address.toLowerCase();
+    if (s.includes('.')) {
+        const last = s.slice(s.lastIndexOf(':') + 1), v4 = Buffer.from(last.split('.').map(Number));
+        s = s.slice(0, s.lastIndexOf(':')) + ':' + v4.readUInt16BE(0).toString(16) + ':' + v4.readUInt16BE(2).toString(16);
+    }
+    const halves = s.split('::'), left = halves[0] ? halves[0].split(':') : [], right = halves.length > 1 && halves[1] ? halves[1].split(':') : [];
+    const missing = 8 - left.length - right.length, groups = halves.length === 2 ? [...left, ...Array(missing).fill('0'), ...right] : left;
+    if (groups.length !== 8 || groups.some(g => !/^[0-9a-f]{1,4}$/i.test(g))) throw new Error('IP SAN IPv6 tidak valid: ' + address);
+    return Buffer.concat(groups.map(h => { const b = Buffer.alloc(2); b.writeUInt16BE(parseInt(h || '0', 16)); return b; }));
+}
+function sanDer(sans) {
+    const names = [];
+    for (const item of sans) {
+        const m = /^(DNS|IP):(.+)$/i.exec(String(item));
+        if (!m) continue;
+        if (m[1].toUpperCase() === 'DNS') {
+            const h = m[2].trim();
+            if (!h || /[^\x21-\x7e]/.test(h) || /[,*]/.test(h)) throw new Error('DNS SAN tidak valid: ' + h);
+            names.push(der(0x82, Buffer.from(h, 'ascii')));
+        } else names.push(der(0x87, ipBytes(m[2].trim())));
+    }
+    if (!names.length) throw new Error('SAN sertifikat kosong.');
+    return seq(...names);
+}
+function serialDer() {
+    const b = crypto.randomBytes(16); b[0] &= 0x7f;
+    if (b.every(x => x === 0)) b[15] = 1;
+    return integer(b);
+}
+function readTlv(b, offset) {
+    if (offset + 2 > b.length) throw new Error('DER terpotong.');
+    const tag = b[offset]; let len = b[offset + 1], head = 2;
+    if (len & 0x80) {
+        const count = len & 0x7f;
+        if (!count || count > 4 || offset + 2 + count > b.length) throw new Error('Panjang DER tidak valid.');
+        len = 0;
+        for (let i = 0; i < count; i++) len = len * 256 + b[offset + 2 + i];
+        head += count;
+    }
+    const start = offset, contentStart = offset + head, end = contentStart + len;
+    if (end > b.length) throw new Error('Nilai DER melampaui buffer.');
+    return { tag, start, contentStart, end };
+}
+function children(b, node) {
+    const out = []; let pos = node.contentStart;
+    while (pos < node.end) { const item = readTlv(b, pos); out.push(item); pos = item.end; }
+    if (pos !== node.end) throw new Error('Struktur DER tidak lengkap.');
+    return out;
+}
+function subjectDer(certDer) {
+    const outer = readTlv(certDer, 0);
+    if (outer.tag !== 0x30 || outer.end !== certDer.length) throw new Error('Sertifikat CA bukan DER SEQUENCE yang valid.');
+    const fields = children(certDer, outer), tbs = fields[0];
+    if (!tbs || tbs.tag !== 0x30) throw new Error('TBSCertificate tidak valid.');
+    const tbsFields = children(certDer, tbs);
+    let i = tbsFields[0] && tbsFields[0].tag === 0xa0 ? 1 : 0;
+    i += 4;
+    const subject = tbsFields[i];
+    if (!subject || subject.tag !== 0x30) throw new Error('Subject CA tidak ditemukan.');
+    return certDer.subarray(subject.start, subject.end);
+}
+function skiFor(publicKey) {
+    const spki = crypto.createPublicKey(publicKey).export({ type: 'spki', format: 'der' });
+    const f = children(spki, readTlv(spki, 0)), bits = f[1];
+    if (!bits || bits.tag !== 0x03 || spki[bits.contentStart] !== 0) throw new Error('Public key SPKI tidak valid.');
+    return crypto.createHash('sha1').update(spki.subarray(bits.contentStart + 1, bits.end)).digest();
+}
+function createCert({ pub, issuer, subject, signer, before, after, extensions }) {
+    const alg = sigAlg(), tbs = seq(
+        der(0xa0, integer(2)), serialDer(), alg, issuer, seq(timeDer(before), timeDer(after)),
+        subject, crypto.createPublicKey(pub).export({ type: 'spki', format: 'der' }),
+        der(0xa3, seq(...extensions))
+    );
+    return seq(tbs, alg, bitString(crypto.sign('sha256', tbs, signer)));
+}
+function toPem(label, b) {
+    const chunks = b.toString('base64').match(/.{1,64}/g) || [];
+    return '-----BEGIN ' + label + '-----\n' + chunks.join('\n') + '\n-----END ' + label + '-----\n';
+}
 function ensureDir(dir, mode) {
-    fs.mkdirSync(dir, { recursive: true });
-    try { fs.chmodSync(dir, mode); } catch { /* fs tanpa unix */ }
+    fs.mkdirSync(dir, { recursive: true, mode });
+    try { fs.chmodSync(dir, mode); } catch { /* filesystem tanpa chmod */ }
 }
-
-function writePem(file, text, mode) {
-    fs.writeFileSync(file, text, { mode });
-    try { fs.chmodSync(file, mode); } catch { /* fs tanpa unix */ }
+function atomicWrite(file, data, mode) {
+    ensureDir(path.dirname(file), 0o700);
+    const tmp = file + '.' + process.pid + '.' + crypto.randomBytes(6).toString('hex') + '.tmp';
+    let fd;
+    try {
+        fd = fs.openSync(tmp, 'wx', mode); fs.writeFileSync(fd, data); fs.fsyncSync(fd);
+        fs.closeSync(fd); fd = undefined;
+        try { fs.chmodSync(tmp, mode); } catch { }
+        fs.renameSync(tmp, file);
+    } catch (e) {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch { } }
+        try { fs.rmSync(tmp, { force: true }); } catch { }
+        throw e;
+    }
 }
-
-function opensslAvailable() {
-    try { return spawnSync('openssl', ['version'], { encoding: 'utf8' }).status === 0; }
-    catch { return false; }
+function keyPair(bits) {
+    return crypto.generateKeyPairSync('rsa', {
+        modulusLength: bits, publicExponent: 0x10001,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+    });
 }
-
-// ---------- CA ----------
-function generateCa(caDir, caKeyFile, caCertFile, force) {
-    if (!force && fs.existsSync(caKeyFile) && fs.existsSync(caCertFile)) {
+function caCertificate(kp) {
+    const n = name('NodelixcoreOS Local Root CA'), ski = skiFor(kp.publicKey), now = Date.now();
+    return toPem('CERTIFICATE', createCert({
+        pub: kp.publicKey, issuer: n, subject: n, signer: kp.privateKey,
+        before: new Date(now - 5 * 60000), after: new Date(now + 3650 * DAY_MS),
+        extensions: [
+            extension(OID.BASIC, seq(bool(true)), true),
+            extension(OID.KEY_USAGE, bitField([5, 6]), true),
+            extension(OID.SKI, octet(ski))
+        ]
+    }));
+}
+function validateCa(caPem, keyPem) {
+    let ca, key;
+    try { ca = new crypto.X509Certificate(caPem); key = crypto.createPrivateKey(keyPem); }
+    catch (e) { throw new Error('CA atau kunci privat CA tidak dapat dibaca: ' + e.message); }
+    const now = Date.now();
+    if (!ca.ca) throw new Error('Sertifikat root tidak memiliki Basic Constraints CA:TRUE.');
+    if (new Date(ca.validFrom).getTime() > now || new Date(ca.validTo).getTime() <= now) throw new Error('Sertifikat root CA belum berlaku atau sudah kedaluwarsa.');
+    if (!ca.checkIssued(ca) || !ca.verify(ca.publicKey)) throw new Error('Sertifikat root CA bukan self-signed yang valid.');
+    if (!ca.checkPrivateKey(key)) throw new Error('Kunci privat CA tidak cocok dengan sertifikat root CA.');
+    return { ca, key };
+}
+function buildLeaf(caPem, caKeyPem, sans, cn, days) {
+    const { ca, key: caKey } = validateCa(caPem, caKeyPem);
+    const kp = keyPair(2048), now = Date.now(), ski = skiFor(kp.publicKey), aki = skiFor(ca.publicKey.export({ type: 'spki', format: 'pem' }));
+    const certificate = toPem('CERTIFICATE', createCert({
+        pub: kp.publicKey, issuer: subjectDer(ca.raw), subject: name(cn), signer: caKey,
+        before: new Date(now - 5 * 60000), after: new Date(now + days * DAY_MS),
+        extensions: [
+            extension(OID.BASIC, seq(), true),
+            extension(OID.KEY_USAGE, bitField([0, 2]), true),
+            extension(OID.EXT_KEY_USAGE, seq(oid(OID.SERVER_AUTH))),
+            extension(OID.SAN, sanDer(sans)),
+            extension(OID.SKI, octet(ski)),
+            extension(OID.AKI, seq(der(0x80, aki)))
+        ]
+    }));
+    const leaf = new crypto.X509Certificate(certificate);
+    if (!leaf.checkIssued(ca) || !leaf.verify(ca.publicKey) || !leaf.checkPrivateKey(crypto.createPrivateKey(kp.privateKey))) {
+        throw new Error('Verifikasi sertifikat server yang baru dibuat gagal.');
+    }
+    return { cert: certificate, key: kp.privateKey };
+}
+function generateCa(caDir, caKeyFile, caCertFile, force = false) {
+    ensureDir(caDir, 0o700);
+    const hasKey = fs.existsSync(caKeyFile), hasCert = fs.existsSync(caCertFile);
+    if (!force && hasKey && hasCert) {
+        validateCa(fs.readFileSync(caCertFile), fs.readFileSync(caKeyFile));
+        try { fs.chmodSync(caKeyFile, 0o600); } catch { }
         return { created: false };
     }
-    ensureDir(caDir, 0o700);
-    if (fs.existsSync(caKeyFile) && !force) throw new Error('Kunci CA sudah ada; gunakan --force-ca untuk mengganti.');
-    // genrsa -out menulis kunci langsung ke berkas (bukan stdout).
-    run('openssl', ['genrsa', '-out', caKeyFile, '4096']);
-    try { fs.chmodSync(caKeyFile, 0o600); } catch { }
-    const subj = '/O=NodelixcoreOS/CN=NodelixcoreOS Local Root CA';
-    run('openssl', ['req', '-x509', '-new', '-key', caKeyFile, '-sha256', '-days', '3650',
-        '-subj', subj,
-        '-addext', 'basicConstraints=critical,CA:TRUE',
-        '-addext', 'keyUsage=critical,keyCertSign,cRLSign',
-        '-addext', 'subjectKeyIdentifier=hash',
-        '-out', caCertFile]);
-    try { fs.chmodSync(caCertFile, 0o644); } catch { }
-    // Serial CA dibuat otomatis oleh `x509 -req -CAcreateserial` saat penandatanganan
-    // pertama (format integer hex murni). Jangan dibuat manual: `x509 -serial`
-    // menulis format '0A:B0:...' yang tidak bisa dibaca kembali oleh -CAserial.
+    if (!force && (hasKey || hasCert)) throw new Error('CA tidak lengkap (hanya kunci atau sertifikat yang ada). Pulihkan backup atau gunakan --force-ca setelah menyiapkan ulang trust klien.');
+    const kp = keyPair(4096), cert = caCertificate(kp);
+    validateCa(cert, kp.privateKey);
+    atomicWrite(caKeyFile, kp.privateKey, 0o600);
+    atomicWrite(caCertFile, cert, 0o644);
     return { created: true };
 }
-
-// ---------- Server cert ----------
-function generateServerCert(p, sans, days, forceCa) {
+function generateServerCert(p, sans, days) {
     ensureDir(p.certDir, 0o700);
-    if (!fs.existsSync(p.caCertFile) || !fs.existsSync(p.caKeyFile)) {
-        throw new Error('CA belum ada. Jalankan tanpa --renew untuk membuat CA + server cert.');
-    }
+    if (!fs.existsSync(p.caCertFile) || !fs.existsSync(p.caKeyFile)) throw new Error('CA belum ada. Jalankan tanpa --renew untuk membuat CA + sertifikat server.');
     const cn = tls.serverCn();
-    const sanStr = sans.join(',');
-    const keyFile = p.keyFile;
-    const certFile = p.certFile;
-    // Tulis ekstensi ke file sementara (bukan process substitution — portabel).
-    const extFile = path.join(p.certDir, '.server.ext');
-    const ext = [
-        `subjectAltName=${sanStr}`,
-        'basicConstraints=critical,CA:FALSE',
-        'keyUsage=critical,digitalSignature,keyEncipherment',
-        'extendedKeyUsage=serverAuth',
-        'subjectKeyIdentifier=hash',
-        'authorityKeyIdentifier=keyid:always,issuer'
-    ].join('\n');
-    writePem(extFile, ext + '\n', 0o600);
-
-    try {
-        run('openssl', ['genrsa', '-out', keyFile, '2048']);
-        try { fs.chmodSync(keyFile, 0o600); } catch { }
-        const csrFile = path.join(p.certDir, '.server.csr');
-        run('openssl', ['req', '-new', '-key', keyFile, '-subj', `/O=NodelixcoreOS/CN=${cn}`,
-            '-addext', `subjectAltName=${sanStr}`, '-out', csrFile]);
-        // Tanda tangani dengan CA. -CAcreateserial membuat/memperbarui .srl.
-        // (openssl x509 -req memakai -CA, bukan -CAfile.)
-        run('openssl', ['x509', '-req', '-in', csrFile,
-            '-CA', p.caCertFile, '-CAkey', p.caKeyFile, '-CAcreateserial',
-            '-out', certFile, '-days', String(days), '-sha256',
-            '-extfile', extFile]);
-    } finally {
-        for (const f of [extFile]) { try { fs.rmSync(f, { force: true }); } catch { } }
-    }
-    writePem(certFile, fs.readFileSync(certFile), 0o644);
+    const out = buildLeaf(fs.readFileSync(p.caCertFile), fs.readFileSync(p.caKeyFile), sans, cn, days);
+    atomicWrite(p.keyFile, out.key, 0o600);
+    atomicWrite(p.certFile, out.cert, 0o644);
     return { cn, sans, days };
 }
-
-function printStatus() {
-    const d = tls.describe();
-    if (!d.enabled) { console.log('TLS dinonaktifkan (TLS_ENABLED=false).'); return; }
-    if (!d.ready) { console.log('Belum siap: ' + d.message); return; }
-    console.log('Sertifikat server:');
-    console.log('  CN     : ' + d.cn);
-    console.log('  SAN    : ' + d.sans.join(', '));
-    console.log('  Berlaku: ' + d.certExpires + '  (' + d.certDaysLeft + ' hari tersisa)');
-    console.log('  CA     : ' + (d.ca ? d.ca.subject + '  [fingerprint ' + d.ca.fingerprint + ']' : '(tidak ada)'));
-}
-
-function printTrustGuide(caFile) {
-    const fp = tls.caFingerprint();
-    console.log('\n' + '='.repeat(64));
-    console.log('Sertifikat CA root (sebar ke klien yang akan mempercayai server):');
-    console.log('  ' + caFile);
-    console.log('  Fingerprint SHA-256 (SPKI): ' + (fp || '(belum tersedia)'));
-    console.log('\nAndroid (aplikasi NodelixcoreOS Mobile):');
-    console.log('  1. Salin root-ca.crt ke HP (mis. via USB/Telegram/WiFi).');
-    console.log('  2. Pasang sebagai sertifikat CA sistem (Settings > Security > Install CA)');
-    console.log('     ATAU gunakan Network Security Config yang secara eksplisit mempercayai CA ini');
-    console.log('     (lihat docs/HTTPS-LOCAL.md untuk snippet pinning/trust).');
-    console.log('  3. Gunakan https://<IP-server>:<port> sebagai baseUrl di aplikasi.');
-    console.log('\nBrowser dashboard:');
-    console.log('  Percayai CA lokal di sistem OS/browser, lalu buka https://<IP>:<port>.');
-    console.log('='.repeat(64));
-}
-
-// ---------- main ----------
-function main() {
-    const argv = process.argv.slice(2);
-    const has = f => argv.includes(f);
-    if (has('--help') || has('-h')) {
-        console.log(fs.readFileSync(__filename, 'utf8').split('//   node gen-certs.js')[0]);
-        return;
-    }
-    if (!opensslAvailable()) {
-        console.error('openssl tidak terpasang. Pasang dulu: pkg install openssl (Termux) atau apt install openssl.');
-        process.exit(2);
-    }
-    const p = tls.paths();
-    if (has('--status')) { printStatus(); return; }
-
-    const forceCa = has('--force-ca');
-    const renew = has('--renew');
-    const days = tls.certDays();
-
-    // Pembaruan SAN dari argumen --san (ditambah deteksi otomatis & env).
-    const sanArg = argv.find(a => a.startsWith('--san='));
-    if (sanArg) {
-        const val = sanArg.slice('--san='.length);
-        process.env.TLS_SAN = [process.env.TLS_SAN, val].filter(Boolean).join(',');
-    }
-
-    const caRes = generateCa(p.caDir, p.caKeyFile, p.caCertFile, forceCa);
-    const sans = tls.collectSans();
-    const srvRes = generateServerCert(p, sans, days, forceCa);
-
-    // Verifikasi hasil dengan modul runtime (tolak cert cacat).
-    const loaded = tls.load();
-    if (!loaded) { console.error('TLS dinonaktifkan; tidak ada sertifikat yang dimuat.'); process.exit(1); }
-
-    console.log('[gen-certs] CA root    : ' + (caRes.created ? 'dibuat baru' : 'dipertahankan'));
-    console.log('[gen-certs] Server CN  : ' + srvRes.cn);
-    console.log('[gen-certs] SAN        : ' + srvRes.sans.join(', '));
-    console.log('[gen-certs] Masa berlaku: ' + days + ' hari (diperbarui ' + new Date().toISOString() + ')');
-    printTrustGuide(p.caCertFile);
-    if (forceCa) {
-        console.warn('[gen-certs] ⚠ CA diganti: SEMUA klien (Android/browser) harus memasang CA baru lagi.');
-    }
-}
-
-// ---------- Programmatic API (dipakai pengujian & TLS_AUTOGEN) ----------
-// Buat/perbarui CA + sertifikat server di dataDir yang diberikan. Kembalikan
-// { caCertFile, certFile, keyFile, sans, cn, days }.
 function ensureCertificates({ dataDir, forceCa = false, renew = false, days, quiet = false } = {}) {
-    if (!opensslAvailable()) throw new Error('openssl tidak terpasang (pkg install openssl).');
     const p = tls.paths(dataDir);
+    ensureDir(p.caDir, 0o700); ensureDir(p.certDir, 0o700);
+    if (renew && (!fs.existsSync(p.caCertFile) || !fs.existsSync(p.caKeyFile))) throw new Error('Tidak dapat --renew karena CA belum ada. Jalankan tanpa --renew untuk membuat CA + sertifikat server.');
     const caRes = generateCa(p.caDir, p.caKeyFile, p.caCertFile, forceCa);
-    const sans = tls.collectSans();
-    const cn = tls.serverCn();
-    const d = days || tls.certDays();
-    const srvRes = generateServerCert(p, sans, d, forceCa);
-    // Verifikasi hasil dengan modul runtime (tolak cert cacat).
+    const sans = tls.collectSans(), cn = tls.serverCn(), d = days || tls.certDays();
+    if (!Number.isInteger(d) || d < 1 || d > 3650) throw new Error('Masa berlaku sertifikat harus 1–3650 hari.');
+    const srv = generateServerCert(p, sans, d);
     const loaded = tls.load(p);
-    if (!loaded) throw new Error('TLS dinonaktifkan; tidak ada sertifikat yang dimuat.');
+    if (!loaded) throw new Error('TLS dinonaktifkan; sertifikat tidak dimuat.');
     if (!quiet) {
-        console.log('[gen-certs] CA root    : ' + (caRes.created ? 'dibuat baru' : 'dipertahankan'));
-        console.log('[gen-certs] Server CN  : ' + cn);
-        console.log('[gen-certs] SAN        : ' + sans.join(', '));
-        console.log('[gen-certs] Masa berlaku: ' + d + ' hari');
+        console.log('[gen-certs] CA root: ' + (caRes.created ? 'dibuat baru' : 'dipertahankan'));
+        console.log('[gen-certs] Server CN: ' + cn);
+        console.log('[gen-certs] SAN: ' + sans.join(', '));
+        console.log('[gen-certs] Masa berlaku: ' + d + ' hari (' + new Date().toISOString() + ')');
+        console.log('Root CA: ' + p.caCertFile);
+        console.log('Fingerprint SHA-256 (SPKI): ' + tls.caFingerprint());
+        console.log('Android: tambahkan CA melalui Network Security Config; jangan gunakan trust-all.');
+        console.log('Alamat server: https://<IP-server>:' + (process.env.PORT || 3000));
+        if (forceCa) console.warn('[gen-certs] ⚠ CA diganti: semua klien harus mempercayai CA baru.');
     }
     return { caCertFile: p.caCertFile, caKeyFile: p.caKeyFile, certFile: p.certFile, keyFile: p.keyFile, sans, cn, days: d, created: caRes.created };
 }
-
-module.exports = { ensureCertificates, generateCa, generateServerCert, opensslAvailable, run };
-
-// ---------- main (CLI) ----------
+function printStatus() {
+    const d = tls.describe();
+    if (!d.enabled) return console.log('TLS dinonaktifkan (TLS_ENABLED=false).');
+    if (!d.ready) return console.log('Belum siap: ' + d.message);
+    console.log('Sertifikat server:');
+    console.log('  CN     : ' + d.cn);
+    console.log('  SAN    : ' + d.sans.join(', '));
+    console.log('  Berlaku: ' + d.certExpires + ' (' + d.certDaysLeft + ' hari tersisa)');
+    console.log('  CA     : ' + (d.ca ? d.ca.subject + ' [fingerprint ' + d.ca.fingerprint + ']' : '(tidak ada)'));
+}
+function main(argv = process.argv.slice(2)) {
+    const has = flag => argv.includes(flag);
+    if (has('--help') || has('-h')) {
+        console.log('NodelixcoreOS HTTPS certificate manager\n  node gen-certs.js\n  node gen-certs.js --renew\n  node gen-certs.js --force-ca\n  node gen-certs.js --status\n  node gen-certs.js --san=DNS:nodelix.local,IP:192.168.1.10\n\nGenerator menggunakan Node.js crypto dan tidak memanggil OpenSSL CLI.');
+        return;
+    }
+    if (has('--status')) return printStatus();
+    const sanArg = argv.find(a => a.startsWith('--san='));
+    if (sanArg) process.env.TLS_SAN = [process.env.TLS_SAN, sanArg.slice(6)].filter(Boolean).join(',');
+    return ensureCertificates({ forceCa: has('--force-ca'), renew: has('--renew') });
+}
+module.exports = { ensureCertificates, generateCa, generateServerCert };
 if (require.main === module) {
     try { main(); }
-    catch (e) {
-        console.error('[gen-certs] gagal: ' + e.message);
-        process.exit(1);
-    }
+    catch (e) { console.error('[gen-certs] gagal: ' + e.message); process.exitCode = 1; }
 }
