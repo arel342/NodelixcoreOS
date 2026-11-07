@@ -192,7 +192,7 @@ test('integrasi: server.js berjalan HTTP dan API tanpa sesi ditolak 401 JSON', a
     const s = await req('/api/session');
     assert.equal(s.status, 200);
     assert.equal(s.body.authenticated, false);
-    assert.ok(s.headers.get('strict-transport-security'), 'HSTS harus ada');
+    assert.equal(s.headers.get('strict-transport-security'), null, 'HTTP tidak boleh mengirim HSTS');
 
     for (const p of ['/api/system', '/api/files', '/api/esp32/status', '/api/door/status', '/api/firmware']) {
         const r = await req(p);

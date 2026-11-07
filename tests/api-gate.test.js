@@ -14,7 +14,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const https = require('https');
+const http = require('http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -25,12 +25,6 @@ const ADMIN = { username: 'admin', password: 'api-gate-test-123' };
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nodelix-gate-'));
 const storageDir = path.join(tmpRoot, 'storage');
 fs.mkdirSync(path.join(storageDir, 'upload'), { recursive: true });
-
-// Hasilkan CA + sertifikat server di temp dir sebelum server di-spawn.
-const { ensureCertificates } = require(path.join(ROOT, 'gen-certs'));
-const certResult = ensureCertificates({ dataDir: tmpRoot, quiet: true });
-const caPem = fs.readFileSync(certResult.caCertFile);
-const agent = new https.Agent({ ca: caPem, rejectUnauthorized: true });
 
 // Data runtime milik server disimpan & dipulihkan agar tes tidak mengubah data pengguna.
 const dataDir = path.join(ROOT, 'data');
@@ -55,7 +49,6 @@ function startServer(prt) {
             env: {
                 ...process.env,
                 PORT: String(prt),
-                TLS_DATA_DIR: tmpRoot, TLS_ENABLED: 'true',
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
                 SESSION_TTL_HOURS: '1',
@@ -89,9 +82,9 @@ async function req(method, url, { body, withCookie = false, headers = {} } = {})
     const h = { ...headers };
     if (withCookie) h.Cookie = cookie;
     if (body !== undefined) h['Content-Type'] = 'application/json';
-    const u = new URL('https://127.0.0.1:' + port + url);
+    const u = new URL('http://127.0.0.1:' + port + url);
     const r = await new Promise((resolve, reject) => {
-        const rq = https.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method, headers: h, agent }, res => {
+        const rq = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method, headers: h }, res => {
             let text = ''; res.setEncoding('utf8'); res.on('data', d => text += d);
             res.on('end', () => {
                 let json = null; try { json = JSON.parse(text); } catch { }

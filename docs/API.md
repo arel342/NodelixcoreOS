@@ -14,14 +14,14 @@ telah diperiksa terhadap kode dan diuji di `tests/`.
 
 | Item | Nilai |
 |---|---|
-| Base URL | `http://<IP-server>:<PORT>` (default `3000`, LAN tepercaya); HTTPS opsional melalui `TLS_ENABLED=true` |
+| Base URL | `http://<IP-server>:<PORT>` (default `3000`, LAN tepercaya) |
 | Format | JSON (`Content-Type: application/json`), kecuali upload/hasil download |
 | Encoding | UTF-8 |
 | Autentikasi web | Cookie `sid` (`HttpOnly; SameSite=Lax`) |
 | Autentikasi mobile | `Authorization: Bearer <sessionToken>` |
 | Token di URL | **Ditolak** (`400`) — jangan pernah `?token=...` |
 | Gerbang `/api` | **Deny-by-default**: setiap `/api/*` (dan `/uploads/*`) wajib sesi sah, kecuali endpoint publik yang tercantum di bagian 2 (`login`, `logout`, `session`, `settings/lang`, `setup/*`, `mobile/*`, `request-otp`, `verify-otp`, `reset-password`) |
-| Header keamanan | `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN` (dapat dimatikan dengan `ALLOW_IFRAME=true`), HSTS hanya lewat HTTPS |
+| Header keamanan | `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN` (dapat dimatikan dengan `ALLOW_IFRAME=true`) |
 
 ### 1.1 Bentuk respons
 

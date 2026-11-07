@@ -9,25 +9,15 @@ Alat bantu utama:
 npm run doctor
 ```
 
-Perintah itu memeriksa Node, dependensi, `.env`, TLS, port, dan folder `data`
+Perintah itu memeriksa Node, dependensi, `.env`, port, dan folder `data`
 lalu menuliskan penyebab + perintah perbaikannya.
 
 ---
 
 ## 1. Yang sudah diverifikasi pada repo ini
 
-Pemeriksaan pada checkout bersih (Node 22.22.3, npm 10.9.8):
-
-| Uji | Hasil |
-| --- | --- |
-| `npm install` | berhasil, 77 paket, tanpa dependency hilang |
-| `node --check server.js` | sintaks valid |
-| `npm start` | server menyala di port 3000, banner tampil, mode setup awal |
-| `npm test` | 248 tes, 247 lulus, 1 di-skip, 0 gagal |
-
-Artinya: **kegagalan `npm start` hampir selalu berasal dari lingkungan**
-(folder salah, `node_modules` belum ada, port bentrok, `.env`/sertifikat tidak
-konsisten, atau versi Node terlalu lama), bukan dari sintaks program.
+Setelah perubahan kode, jalankan `npm test` pada perangkat/lingkungan Node yang
+menjalankan server untuk memverifikasi sintaks dan seluruh tes otomatis.
 
 ## 2. Titik kegagalan saat startup (`server.js`)
 
@@ -37,7 +27,7 @@ Urutan eksekusi dan titik yang bisa menghentikan proses:
 | --- | --- | --- | --- |
 | 1 | `require(express / ws / multer)` | proses berhenti | `Error: Cannot find module 'express'` |
 | 2 | Baca `.env` | baris tidak sesuai format **diabaikan diam-diam** | (tidak ada pesan) |
-| 3 | `tls.createServer()` | `process.exit(1)` | `[TLS] Gagal memuat sertifikat: ...` |
+| 3 | `http.createServer()` | server dibuat untuk menerima HTTP | (tidak memerlukan sertifikat) |
 | 4 | `validateSecurityConfig()` | `process.exit(1)` | `[Security] Validasi konfigurasi gagal:` + daftar alasan |
 | 5 | `server.listen(PORT, '0.0.0.0')` | `exitCode = 1` | `[Web] Gagal menjalankan server: listen EADDRINUSE ...` |
 | 6 | Penyimpanan flash disk / perangkat | **tidak fatal**, server tetap jalan | `PENYIMPANAN BELUM SIAP: ...` |
@@ -52,9 +42,6 @@ dashboard tetap bisa dibuka walau flash disk belum terpasang.
 | `npm ERR! Missing script: "start"` | perintah dijalankan di folder yang salah (tidak ada `package.json`) | `cd ~/NodelixcoreOS` lalu `npm start` |
 | `Cannot find module 'express'` / `'ws'` / `'multer'` | `npm install` belum dijalankan, terputus, atau `node_modules` terhapus | `npm install` (ulangi dengan `rm -rf node_modules && npm install` bila perlu) |
 | `SyntaxError: Invalid or unexpected token` / sintaks lain | Node terlalu lama, atau `server.js` rusak/terpotong saat unduh | cek `node -v` (butuh ≥ 18.17), lalu `git pull` atau unduh ulang ZIP rilis |
-| `[TLS] Gagal memuat sertifikat: Sertifikat server belum dibuat` | `TLS_ENABLED=true` tetapi sertifikat belum ada | `npm run gen-certs` **atau** kembali ke HTTP: `TLS_ENABLED=false`, `TLS_ALLOW_HTTP=true` di `.env` |
-| `Sertifikat server kedaluwarsa` / `tidak cocok dengan CA` | sertifikat lama / jam sistem bergeser | `npm run gen-certs -- --renew` |
-| `[Security] Validasi konfigurasi gagal: TLS_ENABLED=false tetapi TLS_ALLOW_HTTP tidak aktif` | `.env` melarang HTTP padahal TLS mati | set `TLS_ALLOW_HTTP=true`, atau aktifkan TLS |
 | `ADMIN_PASSWORD terlalu pendek` | password < 8 karakter | ganti `ADMIN_PASSWORD` (≥ 8 karakter) di `.env` |
 | `SESSION_TTL_HOURS=... terlalu panjang` | nilai > 720 jam | turunkan ke ≤ 720 |
 | `[Web] Gagal menjalankan server: listen EADDRINUSE ... :3000` | port 3000 masih dipakai proses lama (Termux sering meninggalkan sesi `node server.js`) | `pkill -f "node server.js"` lalu `npm start`; atau ubah `PORT=3001` di `.env` |
@@ -183,8 +170,6 @@ Termux tanpa internet sama sekali: `npm install` tidak bisa jalan. Pilihannya
 ### Langkah 5 — bedakan modul pihak ketiga vs modul project
 
 * `Cannot find module 'express' / 'ws' / 'multer'` → dependensi belum terpasang (`npm install`).
-* `Cannot find module './tls'` atau `'/…/NodelixcoreOS/tls.js'` → **berkas project**
-  hilang/terpotong (ZIP tidak lengkap). Perbaiki dengan `git pull` atau unduh ulang repo.
 
 ### Catatan
 

@@ -3,8 +3,8 @@
 Server memakai `ws` dengan `noServer: true`; koneksi hanya diterima setelah
 **HTTP Upgrade** lolos autentikasi.
 
-- URL: `ws://<host>:<port>/` secara default untuk LAN tepercaya; `wss://` bila `TLS_ENABLED=true`
-- Tidak ada token di query string. `ws://host/?token=...` maupun `wss://host/?token=...` **tidak didukung**.
+- URL: `ws://<host>:<port>/` untuk LAN tepercaya
+- Tidak ada token di query string. `ws://host/?token=...` **tidak didukung**.
 - Path apa pun diterima setelah autentikasi berhasil (dashboard memakai `/`).
 
 ---

@@ -33,8 +33,7 @@ function saveEnv(key, value) {
 // Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
 
 const app = express();
-// Default HTTP/WS untuk LAN tepercaya; HTTPS/WSS opsional melalui TLS_ENABLED=true.
-const tls = require('./tls');
+// Server HTTP untuk jaringan lokal; WebSocket menggunakan ws://.
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
 // Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
 const boundedMs = (key, fallback, min, max) => {
@@ -45,19 +44,10 @@ const boundedInt = (key, fallback, min, max) => boundedMs(key, fallback, min, ma
 const REQUEST_TIMEOUT = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
 const HEADERS_TIMEOUT = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), REQUEST_TIMEOUT);
 const KEEP_ALIVE_TIMEOUT = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
-let server;
-try {
-    server = tls.createServer(app, {
-        requestTimeout: REQUEST_TIMEOUT,
-        headersTimeout: HEADERS_TIMEOUT,
-        keepAliveTimeout: KEEP_ALIVE_TIMEOUT
-    });
-} catch (e) {
-    console.error('[TLS] Gagal memuat sertifikat:', e.message);
-    console.error('       Jalankan: npm run gen-certs  (membuat Private CA lokal + sertifikat server)');
-    console.error('       Untuk HTTP di LAN tepercaya: TLS_ENABLED=false TLS_ALLOW_HTTP=true npm start');
-    process.exit(1);
-}
+const server = require('http').createServer(app);
+server.requestTimeout = REQUEST_TIMEOUT;
+server.headersTimeout = HEADERS_TIMEOUT;
+server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT;
 const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
 const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
@@ -86,8 +76,8 @@ const secLog = createSecurityLog({ quiet: true });
 secLog.flush().catch(() => { });
 
 // ================= HEADER KEAMANAN =================
-// Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
-// pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
+// Server berjalan melalui HTTP di LAN. Header browser tetap aktif, tetapi tidak
+// menggantikan enkripsi transport.
 app.disable('x-powered-by');
 // Hanya percayai alamat proxy yang dinyatakan eksplisit (IP/CIDR/keyword Express).
 // TRUST_PROXY=true sengaja tidak diterima karena mempercayai semua hop membuka spoofing.
@@ -106,10 +96,6 @@ app.use((req, res, next) => {
     if (String(env('ALLOW_IFRAME', 'false')).toLowerCase() !== 'true') {
         res.setHeader('X-Frame-Options', 'SAMEORIGIN');
         res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
-    }
-    // HSTS hanya untuk respons HTTPS, bukan HTTP.
-    if (req.secure) {
-        res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}; includeSubDomains`);
     }
     next();
 });
@@ -202,10 +188,8 @@ function closeSocketsFor(evt) {
 }
 auth.setRevokeHandler(closeSocketsFor);
 
-// HTTP memakai server langsung; HTTPS memakai http.Server internal yang
-// memarser request dari socket TLS. Pasang upgrade pada penerima HTTP yang benar.
-const upgradeServer = server.httpServer || server;
-upgradeServer.on('upgrade', (req, socket, head) => {
+// WebSocket upgrade diterima langsung oleh HTTP server.
+server.on('upgrade', (req, socket, head) => {
     // Socket mentah setelah upgrade menjadi tanggung jawab kita: tanpa listener 'error',
     // klien yang memutus koneksi di tengah handshake (ECONNRESET/EPIPE) akan melempar
     // exception tak tertangani yang mematikan seluruh server.
@@ -348,7 +332,7 @@ app.post('/api/login', (req, res) => {
     }
     loginLimiter.reset(req.ip);
     secLog.loginSuccess(req.ip, String(username).slice(0, 32));
-    createSession(res, { secure: !!req.secure });
+    createSession(res, { secure: false });
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
@@ -539,7 +523,7 @@ function lanBaseUrl() {
     const ips = Object.values(os.networkInterfaces()).flat()
         .filter(i => i && i.family === 'IPv4' && !i.internal && !/^169\.254\./.test(i.address))
         .map(i => i.address);
-    return `${tls.scheme()}://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
+    return `http://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
 }
 const updater = require('./updater')({
     app, env, broadcast, notify, rootDir: __dirname,
@@ -792,21 +776,9 @@ function printBanner() {
         .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
     const list = ips.length ? ips : ['localhost'];
     const port = env('PORT', 3000);
-    const scheme = tls.scheme();
+    const scheme = 'http';
     console.log('=================================');
-    if (!tls.isEnabled()) {
-        console.log('[TLS] ⚠ Server berjalan HTTP PLAINTEXT (TLS_ENABLED=false + TLS_ALLOW_HTTP=true).');
-        console.log('[TLS]   Gunakan hanya di LAN tepercaya; jangan ekspos HTTP ke internet.');
-    } else {
-        const d = tls.describe();
-        if (d.ready) {
-            console.log(`[TLS] HTTPS aktif. Masa berlaku sertifikat: ${d.certExpires} (${d.certDaysLeft} hari).`);
-            if (d.ca) console.log(`[TLS] CA root: ${d.ca.subject.replace(/\n/g, ' / ')} [fingerprint ${d.ca.fingerprint}]`);
-            console.log(`[TLS] Sebar root-ca.crt ke Android/browser dan percayai (lihat docs/HTTPS-LOCAL.md).`);
-        } else {
-            console.log('[TLS] ⚠ ' + (d.message || 'Sertifikat belum siap.'));
-        }
-    }
+    console.log('[HTTP] Server berjalan pada jaringan lokal. Trafik tidak dienkripsi.');
     if (setupRequired()) {
         list.forEach(ip => console.log(`Setup awal: ${scheme}://${ip}:${port}/setup.html`));
         console.log('- Buka alamat itu di HP/PC (satu WiFi dengan Termux).');
@@ -828,12 +800,6 @@ function printBanner() {
 // Tolak konfigurasi yang membahayakan keamanan sebelum server mulai mendengarkan.
 function validateSecurityConfig() {
     const errors = [];
-
-    // 1. Gunakan konfigurasi transport yang sama dengan pembuatan server.
-    const tlsEnabled = tls.isEnabled();
-    if (!tlsEnabled && !tls.allowHttp()) {
-        errors.push('TLS_ENABLED=false tetapi TLS_ALLOW_HTTP tidak aktif — server tidak boleh berjalan HTTP terbuka tanpa perlindungan.');
-    }
 
     // 2. Password admin harus cukup panjang.
     const pwd = env('ADMIN_PASSWORD', '');
@@ -858,19 +824,12 @@ function validateSecurityConfig() {
         errors.push('MOBILE_SESSION_TTL_HOURS=' + mTtl + ' terlalu panjang (maks 720 jam / 30 hari).');
     }
 
-    // 6. TLS_ALLOW_NO_SAN harus eksplisit true (tidak direkomendasikan).
-    if (String(env('TLS_ALLOW_NO_SAN', 'false')).toLowerCase() === 'true') {
-        console.warn('[Security] TLS_ALLOW_NO_SAN=true — sertifikat tanpa SAN diizinkan (tidak direkomendasikan).');
-    }
-
     if (errors.length) {
         console.error('[Security] Validasi konfigurasi gagal:');
         for (const e of errors) console.error('  - ' + e);
         throw new Error('Konfigurasi keamanan tidak valid. Perbaiki .env sebelum menjalankan server.');
     }
-    if (tlsEnabled) {
-        console.log('[Security] Validasi konfigurasi keamanan: OK (TLS aktif, password admin memenuhi syarat).');
-    }
+    console.log('[Security] Validasi konfigurasi keamanan: OK (HTTP lokal, password admin memenuhi syarat).');
 }
 
 try { validateSecurityConfig(); }

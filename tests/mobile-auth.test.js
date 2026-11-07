@@ -361,7 +361,7 @@ test('verify: tanda tangan salah, origin salah, timestamp basi, dan kunci lain d
         // 2. Origin berbeda (domain separation).
         ch = await issue();
         ts = Date.now();
-        sig = signDer(pair.privateKey, canonical(DEVICE_ID, ch.body.challengeId, ch.body.nonce, ts, 'https://evil.example'));
+        sig = signDer(pair.privateKey, canonical(DEVICE_ID, ch.body.challengeId, ch.body.nonce, ts, 'http://evil.example'));
         r = await post(`${cfg.base}/api/mobile/auth/verify`, { deviceId: DEVICE_ID, challengeId: ch.body.challengeId, timestamp: ts, signatureBase64: sig });
         assert.equal(r.status, 401);
         assert.equal(r.body.code, 'invalid_signature');
@@ -440,14 +440,14 @@ test('verify: menerima alias field `signature` dan format r||s (P1363)', async (
 });
 
 test('verify: reverse proxy origin harus dikonfigurasi di server, bukan dipercaya dari klien', async () => {
-    const origin = 'https://nodelix.example:8443';
+    const origin = 'http://nodelix.example:3000';
     const cfg = await startServer({ envExtra: { MOBILE_AUTH_SERVER_ORIGIN: origin } });
     try {
         const pair = newKeyPair();
         await register(cfg, pair);
         const ch = await post(`${cfg.base}/api/mobile/auth/challenge`, { deviceId: DEVICE_ID });
         const ts = Date.now();
-        const origin = 'https://nodelix.example:8443';
+        const origin = 'http://nodelix.example:3000';
         const r = await post(`${cfg.base}/api/mobile/auth/verify`, {
             deviceId: DEVICE_ID, challengeId: ch.body.challengeId, timestamp: ts, serverOrigin: origin + '/',
             signatureBase64: signDer(pair.privateKey, canonical(DEVICE_ID, ch.body.challengeId, ch.body.nonce, ts, origin))
@@ -626,8 +626,8 @@ test('websocket: sesi dicabut -> koneksi diputus (4403)', async () => {
 // ---------- Integrasi server.js ----------
 test('server.js: upgrade WebSocket memakai auth.resolve dan menyimpan identitas sesi', () => {
     const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-    assert.match(src, /const upgradeServer = server\.httpServer \|\| server;/);
-    assert.match(src, /upgradeServer\.on\('upgrade'[\s\S]{0,400}auth\.resolve\(req\)/);
+    assert.match(src, /server\.on\('upgrade'/);
+    assert.match(src, /server\.on\('upgrade'[\s\S]{0,400}auth\.resolve\(req\)/);
     assert.match(src, /ws\.auth = r/);
     assert.match(src, /auth\.revalidate\(ws\.auth\)/);
     assert.match(src, /require\('\.\/mobile-auth'\)/);
@@ -664,7 +664,7 @@ test('verify: serverOrigin yang hanya diklaim klien ditolak', async () => {
         await register(cfg, pair);
         const ch = await post(`${cfg.base}/api/mobile/auth/challenge`, { deviceId: DEVICE_ID });
         const ts = Date.now();
-        const untrusted = 'https://attacker.example';
+        const untrusted = 'http://attacker.example';
         const result = await post(`${cfg.base}/api/mobile/auth/verify`, {
             deviceId: DEVICE_ID,
             challengeId: ch.body.challengeId,

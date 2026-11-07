@@ -245,17 +245,8 @@ Buat `.env`:
 cp .env.example .env
 ```
 
-Web default memakai **HTTP/WS** dan tidak memerlukan sertifikat. Untuk instalasi
-lama, ubah `.env` menjadi berikut, lalu restart server:
-
-```dotenv
-TLS_ENABLED=false
-TLS_ALLOW_HTTP=true
-```
-
+Server hanya menggunakan **HTTP/WS** dan tidak memerlukan sertifikat. Hapus pengaturan sertifikat lama dari `.env` jika masih ada.
 Gunakan HTTP hanya di LAN tepercaya: password dan token tidak dienkripsi.
-HTTPS tetap tersedia secara opsional dengan `TLS_ENABLED=true` dan
-`npm run gen-certs`; lihat [`docs/HTTPS-LOCAL.md`](docs/HTTPS-LOCAL.md).
 
 Jalankan:
 
@@ -815,7 +806,7 @@ Sebelum menebak penyebabnya, periksa lingkungan dengan satu perintah:
 npm run doctor
 ```
 
-Skrip ini membaca Node/npm, `node_modules`, `.env`, konfigurasi TLS, port web, dan
+Skrip ini membaca Node/npm, `node_modules`, `.env`, port web, dan
 folder `data` — lalu mencetak penyebab beserta perintah perbaikannya. Ia tidak
 menyalakan server dan tidak mengubah berkas.
 
@@ -826,7 +817,6 @@ Penyebab paling sering:
 | `Missing script: "start"` | jalankan dari folder project: `cd ~/NodelixcoreOS` |
 | `Cannot find module 'express'` | `npm install` |
 | `listen EADDRINUSE ... :3000` | server lama masih hidup: `pkill -f "node server.js"`, atau `PORT=3001` di `.env` |
-| `[TLS] Gagal memuat sertifikat` | `npm run gen-certs`, atau set `TLS_ENABLED=false` + `TLS_ALLOW_HTTP=true` |
 | `[Security] Validasi konfigurasi gagal` | ikuti alasan yang dicetak (mis. `ADMIN_PASSWORD` < 8 karakter) |
 | `SyntaxError` | Node < 18.17: perbarui Node, lalu `npm install` ulang |
 
@@ -839,8 +829,7 @@ Project sebaiknya digunakan pada jaringan yang dikontrol oleh pemilik.
 
 Untuk deployment ke internet, pertimbangkan:
 
-* HTTPS
-* Reverse proxy
+* Batasi akses ke jaringan lokal tepercaya
 * Firewall
 * Authentication yang lebih kuat
 * Rate limiting
@@ -867,8 +856,8 @@ Untuk deployment ke internet, pertimbangkan:
   penulisan atomik), dengan masa berlaku dan pencabutan per token/per perangkat.
 * Token di URL ditolak `400`; token tidak pernah ditulis ke log.
 * Header keamanan: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` +
-  `frame-ancestors 'self'` (matikan dengan `ALLOW_IFRAME=true`), HSTS hanya bila lewat
-  HTTPS. CSRF: permintaan non-GET bercookie dengan `Origin` lintas host ditolak.
+  `frame-ancestors 'self'` (matikan dengan `ALLOW_IFRAME=true`). CSRF: permintaan
+  non-GET bercookie dengan `Origin` lintas host ditolak.
 * Batas body JSON (`JSON_BODY_LIMIT`) dan batas satu berkas upload (`UPLOAD_MAX_MB`,
   default 2048 MB) — OTA sudah dibatasi `OTA_MAX_MB` + magic byte `0xE9`.
 * Error handler terakhir tidak pernah mengirim stack trace atau detail internal.
@@ -876,9 +865,8 @@ Untuk deployment ke internet, pertimbangkan:
 
 ### Batasan yang harus dipahami
 
-* Server default memakai HTTP/WS untuk LAN tepercaya. Untuk jaringan tidak
-  tepercaya, aktifkan HTTPS internal (`TLS_ENABLED=true`) atau gunakan reverse
-  proxy TLS (Caddy/Nginx). Jangan kirim password/token melalui HTTP di internet.
+* Server hanya menyediakan HTTP/WS untuk LAN tepercaya. Trafik tidak dienkripsi;
+  jangan mengekspos port server langsung ke internet.
 * Sesi dashboard web tetap di memori: restart server = login ulang di browser.
   Hanya sesi mobile yang persisten.
 * Server tidak pernah menjalankan `git pull`/`git reset` otomatis; update tetap manual
