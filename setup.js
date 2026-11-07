@@ -38,7 +38,7 @@ module.exports = ({ app, saveEnv, settings, esp32, door, telegram, ai, auth, sta
         return {
             required: required(),
             authed,
-            server: { port: s.info.port, ips: s.info.ips, lang: s.info.lang, version: s.info.version, node: s.info.node, env: s.info.envFile },
+            server: { port: s.info.port, ips: s.info.ips, scheme: s.info.scheme || 'http', lang: s.info.lang, version: s.info.version, node: s.info.node, env: s.info.envFile },
             account: { username: s.info.username, hasPassword: s.info.setupDone },
             esp32: { ip: s.esp32.ip, port: s.esp32.port, apiKey: secret(s.esp32.apiKey), hasKey: !!s.esp32.apiKey },
             door: { ip: s.door.ip, port: s.door.port, apiKey: secret(s.door.apiKey), hasKey: !!s.door.apiKey, enrollSec: s.door.enrollSec },

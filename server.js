@@ -1,5 +1,4 @@
 const express = require('express');
-const http = require('http');
 const WebSocket = require('ws');
 const multer = require('multer');
 const fs = require('fs');
@@ -34,17 +33,32 @@ function saveEnv(key, value) {
 // Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
+// Terminasi TLS internal (Private CA + HTTPS/WSS). Server HTTPS langsung;
+// HTTP tidak diterima (pesan jelas dikirim ke klien plaintext, lihat tls.js).
+const tls = require('./tls');
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
 // Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
 const boundedMs = (key, fallback, min, max) => {
     const n = Number(env(key, fallback));
     return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.floor(n))) : fallback;
 };
-server.requestTimeout = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
-server.headersTimeout = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), server.requestTimeout);
-server.keepAliveTimeout = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
+const REQUEST_TIMEOUT = boundedMs('REQUEST_TIMEOUT_MS', 900000, 30000, 3600000);
+const HEADERS_TIMEOUT = Math.min(boundedMs('HEADERS_TIMEOUT_MS', 60000, 10000, 120000), REQUEST_TIMEOUT);
+const KEEP_ALIVE_TIMEOUT = boundedMs('KEEP_ALIVE_TIMEOUT_MS', 5000, 1000, 30000);
+let server;
+try {
+    server = tls.createServer(app, {
+        requestTimeout: REQUEST_TIMEOUT,
+        headersTimeout: HEADERS_TIMEOUT,
+        keepAliveTimeout: KEEP_ALIVE_TIMEOUT
+    });
+} catch (e) {
+    console.error('[TLS] Gagal memuat sertifikat:', e.message);
+    console.error('       Jalankan: npm run gen-certs  (membuat Private CA lokal + sertifikat server)');
+    console.error('       Untuk rollback terkendali (HTTP): TLS_ENABLED=false TLS_ALLOW_HTTP=true npm start');
+    process.exit(1);
+}
+const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
 const PORT = +env('PORT', 3000);
 const storage = require('./storage');   // penyimpanan file di flash disk (lewat su)
 const T = require('./lang');            // pesan server sesuai bahasa aktif (LANGUAGE di .env)
@@ -83,9 +97,9 @@ app.use((req, res, next) => {
         res.setHeader('X-Frame-Options', 'SAMEORIGIN');
         res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     }
-    // HSTS hanya dikirim kalau permintaan memang datang lewat HTTPS (reverse proxy TLS).
+    // HSTS dikirim pada setiap respons HTTPS (server ini TLS langsung, jadi selalu aktif).
     if (req.secure) {
-        res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}`);
+        res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}; includeSubDomains`);
     }
     next();
 });
@@ -178,7 +192,9 @@ function closeSocketsFor(evt) {
 }
 auth.setRevokeHandler(closeSocketsFor);
 
-server.on('upgrade', (req, socket, head) => {
+// WebSocket upgrade dipicu oleh http.Server (yang memarser HTTP dari socket TLS),
+// bukan net.Server deteksi protokol — jadi listener dipasang di httpServer.
+server.httpServer.on('upgrade', (req, socket, head) => {
     // Socket mentah setelah upgrade menjadi tanggung jawab kita: tanpa listener 'error',
     // klien yang memutus koneksi di tengah handshake (ECONNRESET/EPIPE) akan melempar
     // exception tak tertangani yang mematikan seluruh server.
@@ -492,7 +508,7 @@ function lanBaseUrl() {
     const ips = Object.values(os.networkInterfaces()).flat()
         .filter(i => i && i.family === 'IPv4' && !i.internal && !/^169\.254\./.test(i.address))
         .map(i => i.address);
-    return `http://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
+    return `${tls.scheme()}://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
 }
 const updater = require('./updater')({
     app, env, broadcast, notify, rootDir: __dirname,
@@ -738,16 +754,30 @@ function printBanner() {
         .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
     const list = ips.length ? ips : ['localhost'];
     const port = env('PORT', 3000);
+    const scheme = tls.scheme();
     console.log('=================================');
+    if (!tls.isEnabled()) {
+        console.log('[TLS] ⚠ Server berjalan HTTP PLAINTEXT (TLS_ENABLED=false + TLS_ALLOW_HTTP=true).');
+        console.log('[TLS]   Ini hanya untuk rollback/debug. Aktifkan TLS segera.');
+    } else {
+        const d = tls.describe();
+        if (d.ready) {
+            console.log(`[TLS] HTTPS aktif. Masa berlaku sertifikat: ${d.certExpires} (${d.certDaysLeft} hari).`);
+            if (d.ca) console.log(`[TLS] CA root: ${d.ca.subject.replace(/\n/g, ' / ')} [fingerprint ${d.ca.fingerprint}]`);
+            console.log(`[TLS] Sebar root-ca.crt ke Android/browser dan percayai (lihat docs/HTTPS-LOCAL.md).`);
+        } else {
+            console.log('[TLS] ⚠ ' + (d.message || 'Sertifikat belum siap.'));
+        }
+    }
     if (setupRequired()) {
-        list.forEach(ip => console.log(`Setup awal: http://${ip}:${port}/setup.html`));
+        list.forEach(ip => console.log(`Setup awal: ${scheme}://${ip}:${port}/setup.html`));
         console.log('- Buka alamat itu di HP/PC (satu WiFi dengan Termux).');
         console.log('- Di halaman setup: buat username & password, isi IP/port/kunci API ESP32');
         console.log('  dan ESP8266, isi bot Telegram, lalu isi kunci API Gemini (untuk /ai).');
         console.log('  Semua nilai di atas ditulis otomatis ke .env.');
-        console.log('- Setelah selesai, dashboard bisa dibuka di http://' + list[0] + ':' + port);
+        console.log('- Setelah selesai, dashboard bisa dibuka di ' + scheme + '://' + list[0] + ':' + port);
     } else {
-        list.forEach(ip => console.log(`Server aktif: http://${ip}:${port}`));
+        list.forEach(ip => console.log(`Server aktif: ${scheme}://${ip}:${port}`));
     }
     console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
     console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);

@@ -236,7 +236,8 @@
 
     function cardServer() {
         const v = S.server;
-        const url = (S.info.ips || []).map(ip => `http://${ip}:${S.info.port}`).join('  ·  ');
+        const scheme = (S.info && S.info.scheme) || (location.protocol === 'https:' ? 'https' : 'http');
+        const url = (S.info.ips || []).map(ip => `${scheme}://${ip}:${S.info.port}`).join('  ·  ');
         return `
         <div class="cfg-card">
             <div class="cfg-head"><b>${esc(t('cfg.srv'))}</b></div>
