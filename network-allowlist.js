@@ -69,6 +69,25 @@ function parseCidr(entry) {
     return { version: parsed.version, bits: parsed.bits, prefix, network, source: text };
 }
 
+const LOCAL_NETWORKS = [
+    '10.0.0.0/8',
+    '172.16.0.0/12',
+    '192.168.0.0/16',
+    '127.0.0.0/8',
+    '169.254.0.0/16',
+    'fc00::/7',
+    'fe80::/10',
+    '::1/128'
+].map(parseCidr);
+
+function isLocalNetwork(network) {
+    return LOCAL_NETWORKS.some(local => {
+        if (local.version !== network.version || network.prefix < local.prefix) return false;
+        const hostBits = BigInt(network.bits - local.prefix);
+        return (network.network >> hostBits) === (local.network >> hostBits);
+    });
+}
+
 function parseAllowlist(value) {
     const entries = String(value || '').split(',').map(item => item.trim()).filter(Boolean);
     if (!entries.length) throw new Error('LOCAL_ALLOWED_CIDRS harus mengizinkan minimal loopback.');
@@ -76,6 +95,8 @@ function parseAllowlist(value) {
     if (networks.some(item => item.prefix === 0)) {
         throw new Error('CIDR catch-all (/0) tidak diizinkan untuk server lokal.');
     }
+    const nonLocal = networks.find(item => !isLocalNetwork(item));
+    if (nonLocal) throw new Error('LOCAL_ALLOWED_CIDRS hanya boleh berisi subnet private/loopback/link-local: ' + nonLocal.source);
     return networks;
 }
 
@@ -108,4 +129,4 @@ function createNetworkGuard(rawCidrs) {
     };
 }
 
-module.exports = { createNetworkGuard, parseAllowlist, parseCidr, parseIp, isAllowed };
+module.exports = { createNetworkGuard, parseAllowlist, parseCidr, parseIp, isAllowed, isLocalNetwork };
