@@ -68,13 +68,31 @@ function ensureLocalTls() {
             '-extfile', config, '-extensions', 'server_cert'
         ]);
 
-        const serverConfig = fs.readFileSync(config, 'utf8');
-        fs.writeFileSync(caLeafConfig,
-            serverConfig
-                .replace('CA:FALSE', 'CA:TRUE,pathlen:0')
-                .replace('keyUsage = critical,digitalSignature', 'keyUsage = critical,keyCertSign,cRLSign'));
-        fs.writeFileSync(clientOnlyConfig,
-            serverConfig.replace('extendedKeyUsage = serverAuth', 'extendedKeyUsage = clientAuth'));
+        const altNames = [
+            '[ alt_names ]',
+            'DNS.1 = localhost',
+            'IP.1 = 127.0.0.1',
+            'IP.2 = ::1',
+            ''
+        ].join('\n');
+        fs.writeFileSync(caLeafConfig, [
+            '[ server_cert ]',
+            'basicConstraints = critical,CA:TRUE,pathlen:0',
+            'keyUsage = critical,keyCertSign,cRLSign',
+            'extendedKeyUsage = serverAuth',
+            'subjectAltName = @alt_names',
+            '',
+            altNames
+        ].join('\n'));
+        fs.writeFileSync(clientOnlyConfig, [
+            '[ server_cert ]',
+            'basicConstraints = critical,CA:FALSE',
+            'keyUsage = critical,digitalSignature',
+            'extendedKeyUsage = clientAuth',
+            'subjectAltName = @alt_names',
+            '',
+            altNames
+        ].join('\n'));
         for (const [output, ext] of [[caLeafCert, caLeafConfig], [clientOnlyCert, clientOnlyConfig]]) {
             run([
                 'x509', '-req', '-in', csr, '-CA', caCert, '-CAkey', caKey,
