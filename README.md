@@ -2,7 +2,7 @@
 
 Server berbasis **Node.js + Express** yang dirancang untuk berjalan pada perangkat seperti **Android/Termux** dan digunakan sebagai server lokal untuk mengelola file, storage eksternal, perangkat ESP32, serta kontrol lock door.
 
-Project ini menyediakan antarmuka web untuk mengelola penyimpanan dan berkomunikasi dengan perangkat IoT melalui HTTP/WebSocket.
+Project ini menyediakan antarmuka web lokal melalui HTTPS/WSS untuk mengelola penyimpanan dan berkomunikasi dengan perangkat IoT.
 
 ## Fitur
 
@@ -182,19 +182,19 @@ Untuk Android/Termux:
 Dengan port default:
 
 ```text
-http://localhost:3000
+https://nodelixcoreos.local:3000
 ```
 
 Dari perangkat lain dalam jaringan:
 
 ```text
-http://IP-SERVER:3000
+https://HOSTNAME-LAN:3000
 ```
 
 Contoh:
 
 ```text
-http://192.168.1.20:3000
+https://nodelixcoreos.local:3000
 ```
 
 ## Menjalankan di Termux
@@ -259,7 +259,7 @@ Setelah jalan, terminal menampilkan alamat server, mis.:
 
 ```text
 =================================
-Setup awal: http://192.168.1.20:3000/setup.html
+Setup awal: https://nodelixcoreos.local:3000/setup.html
 - Buka alamat itu di HP/PC (satu WiFi dengan Termux).
 - Di halaman setup: buat username & password, isi IP/port/kunci API ESP32
   dan ESP8266, lalu isi bot Telegram. .env diisi otomatis.
@@ -377,7 +377,7 @@ Transfer masuk saat ini dibatasi **20 MB** mengikuti Bot API Telegram standar; p
 Setelah token dan Chat ID disimpan, bot langsung memakai nilai baru tanpa menjalankan ulang server. Tombol
 **Kirim pesan uji** memastikan token dan Chat ID benar.
 
-`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/upload`, `/cancelupload`, `/web off`, `/web on`, `/ai <pertanyaan>`, `/jobs`, `/cancel [id|all]`, `/reset`, `/transcribe` (balas pesan suara), dan `/analyze <path> [pertanyaan]`. Kirim dokumen, foto, video, atau audio ke bot untuk menyimpannya ke flash disk. Jika folder tidak disertakan, bot/AI akan menanyakan tujuan; balas nama folder yang sudah ada atau `.` untuk folder utama. Folder juga bisa ditentukan pada caption, misalnya `/upload Dokumen` atau `/upload foto`. Gunakan `/ai kirim file ...` untuk meminta AI mencari file di flash disk dan mengirimkannya kembali ke chat Telegram admin. File masuk dibatasi 20 MB dan file keluar 49 MB. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTP dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
+`TELEGRAM_CHAT_ID` mengizinkan hanya chat pribadi admin untuk menjalankan perintah. Bot mengirim pesan sambutan saat server mulai. Perintah: `/status`, `/battery`, `/dht`, `/relay 1 on`, `/door off`, `/open`, `/close`, `/addcard Nama`, `/cancelcard`, `/upload`, `/cancelupload`, `/web off`, `/web on`, `/ai <pertanyaan>`, `/jobs`, `/cancel [id|all]`, `/reset`, `/transcribe` (balas pesan suara), dan `/analyze <path> [pertanyaan]`. Kirim dokumen, foto, video, atau audio ke bot untuk menyimpannya ke flash disk. Jika folder tidak disertakan, bot/AI akan menanyakan tujuan; balas nama folder yang sudah ada atau `.` untuk folder utama. Folder juga bisa ditentukan pada caption, misalnya `/upload Dokumen` atau `/upload foto`. Gunakan `/ai kirim file ...` untuk meminta AI mencari file di flash disk dan mengirimkannya kembali ke chat Telegram admin. File masuk dibatasi 20 MB dan file keluar 49 MB. `/door off` menolak akses kartu biasa sampai diaktifkan kembali, tetapi kartu admin tetap dapat membuka pintu; `/open` tetap merupakan perintah admin untuk membuka pintu. `/web off` menghentikan HTTPS dan WebSocket saja, sedangkan proses bot dan polling perangkat tetap berjalan agar `/web on` dapat mengaktifkannya lagi. Gunakan bot hanya dari chat pribadi admin dan jangan bagikan token.
 
 Peringatan baterai rendah dikirim jika `TELEGRAM_ALERTS=true`. DHT11 tersambung ke GPIO 4 ESP32 (DATA ke GPIO 4, VCC ke 3V3, GND ke GND; sensor telanjang mungkin memerlukan resistor pull-up DATA 10 kΩ). Firmware membaca sensor tanpa library DHT tambahan; unggah firmware terbaru dari `frimware/esp32 server sensor.ino` agar perintah `/dht` dan `/status` menampilkan suhu serta kelembapan.
 
@@ -678,7 +678,7 @@ Cara kerjanya:
    request baru ke GitHub — dan langsung menampilkan notifikasinya.
 
 Notifikasi Telegram berisi commit terpasang, commit terbaru, pesan commit, tautan
-repositori, tautan dashboard (`http://<IP-LAN>:<port>/#update`), dan waktu deteksi.
+repositori, tautan dashboard (`https://<HOSTNAME-LAN>:<port>/#update`), dan waktu deteksi.
 Satu notifikasi dikirim per commit; commit yang sama tidak dikirim ulang walau server
 dimulai ulang. Kalau Telegram sedang tidak bisa dihubungi, notifikasi disimpan sebagai
 *tertunda* dan dicoba ulang otomatis. Kalau GitHub tidak tersedia atau membatasi permintaan
@@ -754,17 +754,17 @@ Contoh login mobile dengan `curl` (setelah registrasi):
 
 ```bash
 # 1. minta challenge
-curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/challenge \
+curl --cacert certs/root-ca.crt -s -X POST https://nodelixcoreos.local:3000/api/mobile/auth/challenge \
   -H 'Content-Type: application/json' -d '{"deviceId":"ndlx-..."}'
 
 # 2. tanda tangani "NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonce>|<ts>|<origin>"
 #    dengan kunci ECDSA P-256 (SHA256withECDSA, DER, Base64), lalu:
-curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/verify \
+curl --cacert certs/root-ca.crt -s -X POST https://nodelixcoreos.local:3000/api/mobile/auth/verify \
   -H 'Content-Type: application/json' \
   -d '{"deviceId":"ndlx-...","challengeId":"chl_...","timestamp":1762041612345,"signatureBase64":"MEUCIQ..."}'
 
 # 3. pakai token pada API lain
-curl -s http://192.168.1.10:3000/api/system -H "Authorization: Bearer $TOKEN"
+curl --cacert certs/root-ca.crt -s https://nodelixcoreos.local:3000/api/system -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Update Project
@@ -840,15 +840,14 @@ Untuk deployment ke internet, pertimbangkan:
 * Error handler terakhir tidak pernah mengirim stack trace atau detail internal.
 * Endpoint API tak dikenal menjawab JSON `404` (bukan halaman HTML).
 
-### Batasan yang harus dipahami
+### Status TLS lokal
 
-* Server **tidak** menyediakan HTTPS sendiri. Jalankan di belakang reverse proxy
-  (Caddy/Nginx) dengan sertifikat lokal untuk `https`/`wss`; untuk LAN tepercaya, HTTP
-  tetap didukung sesuai kebutuhan Termux.
-* Sesi dashboard web tetap di memori: restart server = login ulang di browser.
-  Hanya sesi mobile yang persisten.
-* Server tidak pernah menjalankan `git pull`/`git reset` otomatis; update tetap manual
-  (lihat [`docs/UPGRADE.md`](docs/UPGRADE.md)).
+* REST API dan WebSocket dilayani hanya melalui HTTPS/WSS oleh Node.js; tidak ada HTTP listener atau HTTP fallback.
+* Startup ditolak bila server certificate, server private key, public Root CA certificate, validity period, key match, atau SAN tidak lolos validasi.
+* TLS minimum adalah 1.2. Server menggunakan sertifikat yang diterbitkan langsung oleh Root CA lokal yang dikonfigurasi.
+* Akses dibatasi oleh `LOCAL_ALLOWED_CIDRS` dengan pemeriksaan alamat socket. Default hanya loopback; tambahkan subnet LAN aktual setelah dikonfirmasi.
+* Private CA key harus dibuat dan disimpan offline di mesin CA, tidak pernah di server atau repository. Server hanya memerlukan sertifikat server, server private key, dan public CA certificate.
+* Panduan penerbitan sertifikat, firewall, trust Android, dan rollback: [docs/LOCAL-HTTPS.md](docs/LOCAL-HTTPS.md).
 
 ### Catatan migrasi dari versi sebelumnya
 
