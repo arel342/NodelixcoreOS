@@ -245,8 +245,9 @@ Buat `.env`:
 cp .env.example .env
 ```
 
-Server hanya menggunakan **HTTP/WS** dan tidak memerlukan sertifikat. Hapus pengaturan sertifikat lama dari `.env` jika masih ada.
-Gunakan HTTP hanya di LAN tepercaya: password dan token tidak dienkripsi.
+```bash
+nano .env
+```
 
 Jalankan:
 
@@ -749,7 +750,7 @@ Kontrak lengkap beserta contoh request/response: [`docs/API.md`](docs/API.md) da
 perbaikannya: [`docs/SERVER_BUG_AUDIT.md`](docs/SERVER_BUG_AUDIT.md) dan
 [`docs/SERVER_BUG_FIX_REPORT.md`](docs/SERVER_BUG_FIX_REPORT.md).
 
-Contoh login mobile dengan `curl` melalui HTTP di LAN tepercaya (setelah registrasi):
+Contoh login mobile dengan `curl` (setelah registrasi):
 
 ```bash
 # 1. minta challenge
@@ -798,38 +799,14 @@ npm start
 `.env` dan data pengguna (`data/`, flash disk) tidak ditimpa oleh update. Server tidak
 menjalankan `git reset --hard` atau menghapus perubahan lokal.
 
-## `npm start` gagal? Jalankan `npm run doctor`
-
-Sebelum menebak penyebabnya, periksa lingkungan dengan satu perintah:
-
-```bash
-npm run doctor
-```
-
-Skrip ini membaca Node/npm, `node_modules`, `.env`, port web, dan
-folder `data` — lalu mencetak penyebab beserta perintah perbaikannya. Ia tidak
-menyalakan server dan tidak mengubah berkas.
-
-Penyebab paling sering:
-
-| Pesan | Perbaikan cepat |
-| --- | --- |
-| `Missing script: "start"` | jalankan dari folder project: `cd ~/NodelixcoreOS` |
-| `Cannot find module 'express'` | `npm install` |
-| `listen EADDRINUSE ... :3000` | server lama masih hidup: `pkill -f "node server.js"`, atau `PORT=3001` di `.env` |
-| `[Security] Validasi konfigurasi gagal` | ikuti alasan yang dicetak (mis. `ADMIN_PASSWORD` < 8 karakter) |
-| `SyntaxError` | Node < 18.17: perbarui Node, lalu `npm install` ulang |
-
-Tabel lengkap gejala → penyebab → perbaikan ada di
-[`docs/TROUBLESHOOTING-NPM-START.md`](docs/TROUBLESHOOTING-NPM-START.md).
-
 ## Keamanan
 
 Project sebaiknya digunakan pada jaringan yang dikontrol oleh pemilik.
 
 Untuk deployment ke internet, pertimbangkan:
 
-* Batasi akses ke jaringan lokal tepercaya
+* HTTPS
+* Reverse proxy
 * Firewall
 * Authentication yang lebih kuat
 * Rate limiting
@@ -856,8 +833,8 @@ Untuk deployment ke internet, pertimbangkan:
   penulisan atomik), dengan masa berlaku dan pencabutan per token/per perangkat.
 * Token di URL ditolak `400`; token tidak pernah ditulis ke log.
 * Header keamanan: `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options` +
-  `frame-ancestors 'self'` (matikan dengan `ALLOW_IFRAME=true`). CSRF: permintaan
-  non-GET bercookie dengan `Origin` lintas host ditolak.
+  `frame-ancestors 'self'` (matikan dengan `ALLOW_IFRAME=true`), HSTS hanya bila lewat
+  HTTPS. CSRF: permintaan non-GET bercookie dengan `Origin` lintas host ditolak.
 * Batas body JSON (`JSON_BODY_LIMIT`) dan batas satu berkas upload (`UPLOAD_MAX_MB`,
   default 2048 MB) — OTA sudah dibatasi `OTA_MAX_MB` + magic byte `0xE9`.
 * Error handler terakhir tidak pernah mengirim stack trace atau detail internal.
@@ -865,8 +842,9 @@ Untuk deployment ke internet, pertimbangkan:
 
 ### Batasan yang harus dipahami
 
-* Server hanya menyediakan HTTP/WS untuk LAN tepercaya. Trafik tidak dienkripsi;
-  jangan mengekspos port server langsung ke internet.
+* Server **tidak** menyediakan HTTPS sendiri. Jalankan di belakang reverse proxy
+  (Caddy/Nginx) dengan sertifikat lokal untuk `https`/`wss`; untuk LAN tepercaya, HTTP
+  tetap didukung sesuai kebutuhan Termux.
 * Sesi dashboard web tetap di memori: restart server = login ulang di browser.
   Hanya sesi mobile yang persisten.
 * Server tidak pernah menjalankan `git pull`/`git reset` otomatis; update tetap manual
