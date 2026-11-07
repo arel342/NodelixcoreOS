@@ -62,7 +62,7 @@ function parseCidr(entry) {
 
     let prefix = slash < 0 ? parsed.bits : Number(text.slice(slash + 1));
     if (!Number.isInteger(prefix)) throw new Error('Prefix CIDR tidak valid: ' + text);
-    if (parsed.mapped) prefix -= 96;
+    if (parsed.mapped && slash >= 0) prefix -= 96;
     if (prefix < 0 || prefix > parsed.bits) throw new Error('Prefix CIDR di luar rentang: ' + text);
     const hostBits = BigInt(parsed.bits - prefix);
     const network = (parsed.value >> hostBits) << hostBits;
