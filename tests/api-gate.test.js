@@ -16,6 +16,8 @@ const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
+const { ensureLocalTls, httpsFetch } = require('./helpers/local-tls');
+const TEST_TLS = ensureLocalTls();
 
 const ROOT = path.resolve(__dirname, '..');
 const ADMIN = { username: 'admin', password: 'api-gate-test-123' };
@@ -46,6 +48,7 @@ function startServer(prt) {
             cwd: ROOT,
             env: {
                 ...process.env,
+                ...TEST_TLS.serverEnv,
                 PORT: String(prt),
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
@@ -80,7 +83,7 @@ async function req(method, url, { body, withCookie = false, headers = {} } = {})
     const h = { ...headers };
     if (withCookie) h.Cookie = cookie;
     if (body !== undefined) h['Content-Type'] = 'application/json';
-    const r = await fetch(`http://127.0.0.1:${port}${url}`, {
+    const r = await httpsFetch(`https://127.0.0.1:${port}${url}`, {
         method, headers: h, body: body === undefined ? undefined : (typeof body === 'string' ? body : JSON.stringify(body)),
         redirect: 'manual'
     });
@@ -94,7 +97,7 @@ before(async () => {
     port = await freePort();
     child = await startServer(port);
     child.on('exit', () => { });
-    const r = await fetch(`http://127.0.0.1:${port}/api/login`, {
+    const r = await httpsFetch(`https://127.0.0.1:${port}/api/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ADMIN)
