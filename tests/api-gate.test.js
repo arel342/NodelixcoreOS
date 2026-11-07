@@ -55,7 +55,7 @@ function startServer(prt) {
             env: {
                 ...process.env,
                 PORT: String(prt),
-                TLS_DATA_DIR: tmpRoot,
+                TLS_DATA_DIR: tmpRoot, TLS_ENABLED: 'true',
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
                 SESSION_TTL_HOURS: '1',

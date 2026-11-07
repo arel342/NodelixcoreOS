@@ -202,7 +202,7 @@ saat `verify`, sehingga server menyusun kandidat dari:
 1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — **disarankan** jika
    server berada di balik reverse proxy TLS,
 2. `Host` + skema transport yang benar-benar diterima server (`https` untuk HTTPS,
-   `http` hanya bila rollback HTTP eksplisit diaktifkan),
+   `http` untuk mode default HTTP di LAN tepercaya),
 3. `serverOrigin` yang dikirim klien pada body `verify` (bila ada).
 
 Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat. Nonce tetap

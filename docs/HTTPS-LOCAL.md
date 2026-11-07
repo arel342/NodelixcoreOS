@@ -1,6 +1,8 @@
 # HTTPS lokal NodelixcoreOS
 
-Dokumen ini berlaku untuk koneksi dashboard dan aplikasi NodelixcoreOS Mobile ke server Node.js. Server menggunakan HTTPS/WSS langsung dan sertifikat dari Private Root CA lokal.
+Dokumen ini berlaku untuk koneksi dashboard dan aplikasi NodelixcoreOS Mobile ke server Node.js. Default server adalah HTTP/WS untuk LAN tepercaya. Dokumen ini menjelaskan mode HTTPS/WSS opsional dengan sertifikat dari Private Root CA lokal.
+
+Untuk memakai HTTP, set `TLS_ENABLED=false` dan `TLS_ALLOW_HTTP=true` di `.env`, lalu restart. Buka `http://<IP-server>:3000`. Sertifikat tidak diperlukan; password/token tidak dienkripsi.
 
 ## 1. Buat sertifikat di Termux/Linux
 
@@ -9,12 +11,12 @@ Dari direktori project:
 ```bash
 npm install
 npm run gen-certs
-npm start
+TLS_ENABLED=true npm start
 ```
 
 Generator `gen-certs.js` menggunakan API bawaan Node.js (`node:crypto` dan `node:fs`). OpenSSL CLI tidak perlu dipasang atau dipanggil. Node.js tetap menggunakan implementasi TLS kriptografi internalnya sendiri; yang dihilangkan adalah ketergantungan pada program `openssl` eksternal.
 
-Pada instalasi lama, periksa `.env`: pastikan `TLS_ENABLED=true` (atau biarkan default) dan hapus/komentari `TLS_ALLOW_HTTP=true`. Nilai `TLS_ENABLED=false` menonaktifkan HTTPS secara eksplisit.
+Pada instalasi lama, periksa `.env`: pastikan `TLS_ENABLED=true` (harus diaktifkan secara eksplisit) dan hapus/komentari `TLS_ALLOW_HTTP=true`. Nilai `TLS_ENABLED=false` menonaktifkan HTTPS secara eksplisit.
 
 Alamat yang ditampilkan server memakai `https://`, misalnya:
 
@@ -100,4 +102,4 @@ Opsi `--force-ca` membuat Root CA baru. Gunakan hanya bila memang ingin menggant
 - WebSocket: WSS.
 - API path, payload, Bearer token, sesi, ECDSA P-256, dan kontrak autentikasi mobile dipertahankan.
 - Koneksi ESP32/ESP8266 yang tertulis sebagai `http://<IP-ESP>` adalah endpoint firmware/perangkat tersendiri; migrasi server ini tidak mengubah firmware ESP.
-- HTTP hanya dapat diaktifkan secara eksplisit untuk rollback/debug dengan `TLS_ENABLED=false` dan `TLS_ALLOW_HTTP=true`. Jangan gunakan mode tersebut untuk operasi normal.
+- HTTP/WS adalah default untuk LAN tepercaya (`TLS_ENABLED=false`, `TLS_ALLOW_HTTP=true`). Jangan ekspos mode HTTP ke internet.

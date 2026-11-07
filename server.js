@@ -33,8 +33,7 @@ function saveEnv(key, value) {
 // Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
 
 const app = express();
-// Terminasi TLS internal (Private CA + HTTPS/WSS). Server HTTPS langsung;
-// HTTP tidak diterima (pesan jelas dikirim ke klien plaintext, lihat tls.js).
+// Default HTTP/WS untuk LAN tepercaya; HTTPS/WSS opsional melalui TLS_ENABLED=true.
 const tls = require('./tls');
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
 // Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
@@ -56,7 +55,7 @@ try {
 } catch (e) {
     console.error('[TLS] Gagal memuat sertifikat:', e.message);
     console.error('       Jalankan: npm run gen-certs  (membuat Private CA lokal + sertifikat server)');
-    console.error('       Untuk rollback terkendali (HTTP): TLS_ENABLED=false TLS_ALLOW_HTTP=true npm start');
+    console.error('       Untuk HTTP di LAN tepercaya: TLS_ENABLED=false TLS_ALLOW_HTTP=true npm start');
     process.exit(1);
 }
 const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
@@ -108,7 +107,7 @@ app.use((req, res, next) => {
         res.setHeader('X-Frame-Options', 'SAMEORIGIN');
         res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
     }
-    // HSTS dikirim pada setiap respons HTTPS (server ini TLS langsung, jadi selalu aktif).
+    // HSTS hanya untuk respons HTTPS, bukan HTTP.
     if (req.secure) {
         res.setHeader('Strict-Transport-Security', `max-age=${+env('HSTS_MAX_AGE', 15552000)}; includeSubDomains`);
     }
@@ -796,7 +795,7 @@ function printBanner() {
     console.log('=================================');
     if (!tls.isEnabled()) {
         console.log('[TLS] ⚠ Server berjalan HTTP PLAINTEXT (TLS_ENABLED=false + TLS_ALLOW_HTTP=true).');
-        console.log('[TLS]   Ini hanya untuk rollback/debug. Aktifkan TLS segera.');
+        console.log('[TLS]   Gunakan hanya di LAN tepercaya; jangan ekspos HTTP ke internet.');
     } else {
         const d = tls.describe();
         if (d.ready) {
@@ -829,9 +828,9 @@ function printBanner() {
 function validateSecurityConfig() {
     const errors = [];
 
-    // 1. TLS harus aktif (atau HTTP eksplisit diizinkan untuk rollback terkendali).
-    const tlsEnabled = String(env('TLS_ENABLED', 'true')).toLowerCase() !== 'false';
-    if (!tlsEnabled && String(env('TLS_ALLOW_HTTP', 'false')).toLowerCase() !== 'true') {
+    // 1. Gunakan konfigurasi transport yang sama dengan pembuatan server.
+    const tlsEnabled = tls.isEnabled();
+    if (!tlsEnabled && !tls.allowHttp()) {
         errors.push('TLS_ENABLED=false tetapi TLS_ALLOW_HTTP tidak aktif — server tidak boleh berjalan HTTP terbuka tanpa perlindungan.');
     }
 

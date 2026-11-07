@@ -28,6 +28,7 @@ const ADMIN = { username: 'admin', password: 'tls-test-123' };
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nodelix-tls-'));
 const storageDir = path.join(tmpRoot, 'storage');
 fs.mkdirSync(path.join(storageDir, 'upload'), { recursive: true });
+process.env.TLS_ENABLED = 'true'; // HTTPS adalah mode opt-in
 process.env.TLS_DATA_DIR = tmpRoot; // agar tlsOptions()/load() di proses parent memakai CA tes
 
 const { ensureCertificates } = require(path.join(ROOT, 'gen-certs'));
