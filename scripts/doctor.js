@@ -178,6 +178,21 @@ function main() {
             line(OK, 'Sintaks server.js', 'valid');
         }
     }
+    // Termux: project di penyimpanan bersama Android (/sdcard) tidak bisa memasang
+    // node_modules dengan benar — FUSE menolak symlink & izin, npm install gagal separuh.
+    if (/^\/(?:storage|sdcard|mnt\/sdcard|mnt\/media_rw|mnt\/runtime)\//.test(ROOT + '/')) {
+        fail('Project berada di penyimpanan bersama Android', ROOT,
+            'Pindahkan ke penyimpanan internal Termux, lalu pasang ulang:\n' +
+            '         mv ' + ROOT + ' ~/NodelixcoreOS && cd ~/NodelixcoreOS && npm install\n' +
+            '         (di /sdcard, FUSE menolak symlink/izin sehingga node_modules gagal dibuat)');
+    }
+    try {
+        fs.accessSync(ROOT, fs.constants.W_OK);
+        line(OK, 'Folder project', 'bisa ditulis (syarat npm install)');
+    } catch {
+        fail('Folder project tidak bisa ditulis', ROOT,
+            'Perbaiki kepemilikan/izin: chmod u+w ' + ROOT + '   (npm install butuh menulis node_modules)');
+    }
     if (!depsOk && fs.existsSync(path.join(ROOT, 'node_modules'))) {
         warn('node_modules ada tapi tidak lengkap', 'kemungkinan npm install terputus',
             'Hapus lalu pasang ulang: rm -rf node_modules && npm install');

@@ -115,3 +115,83 @@ npm start 2>&1 | head -40
 Baris pertama setelah banner biasanya sudah menyebut penyebabnya. Jangan hanya
 mengirim "tidak bisa": pesan `Cannot find module`, `EADDRINUSE`, dan `[Security]`
 menunjuk ke perbaikan yang sangat berbeda.
+
+## 6. Termux: `Cannot find module 'express'` (kasus paling sering)
+
+Pesan ini berarti Node **tidak menemukan folder `node_modules`** di samping
+`server.js`. Repo GitHub memang **tidak menyertakan `node_modules`** (ada di
+`.gitignore`), jadi `git clone` atau unduh ZIP saja tidak cukup — dependensi harus
+dipasang sendiri.
+
+### Langkah 1 — pastikan berada di folder project
+
+```bash
+cd ~/NodelixcoreOS
+pwd                 # harus berakhir di /NodelixcoreOS
+ls package.json server.js
+```
+
+Kalau `ls` gagal, Anda berada di folder yang salah (atau project belum di-clone).
+
+### Langkah 2 — pasang dependensi
+
+```bash
+pkg install nodejs-lts git     # sekali saja; nodejs-lts = Node 20/22
+npm install
+```
+
+Akhir output yang benar terlihat seperti:
+
+```text
+added 77 packages, and audited 78 packages in 1s
+```
+
+Kalau ada `npm ERR!`, **jangan diabaikan** — `npm start` pasti akan gagal lagi.
+Lihat pemetaan error di Langkah 4.
+
+### Langkah 3 — verifikasi
+
+```bash
+npm ls --depth=0
+# server2@1.2.0 /data/data/com.termux/files/home/NodelixcoreOS
+# +-- express@5.2.1
+# +-- multer@2.4.0
+# `-- ws@8.22.0
+
+node -e "require('express'); require('ws'); require('multer'); console.log('dependensi OK')"
+npm run doctor
+npm start
+```
+
+Kalau `npm ls` menulis `UNMET DEPENDENCY` atau `missing`, instalasi belum lengkap:
+`rm -rf node_modules && npm install`.
+
+### Langkah 4 — arti error `npm install` di Termux
+
+| Error saat `npm install` | Arti | Perbaikan |
+| --- | --- | --- |
+| `EPERM: operation not permitted, symlink ...` / `EXDEV` | project ada di `/sdcard` atau `/storage/emulated/0` (FUSE tidak mendukung symlink) | pindahkan ke penyimpanan internal: `mv /sdcard/NodelixcoreOS ~/NodelixcoreOS && cd ~/NodelixcoreOS && npm install` |
+| `EACCES: permission denied` | folder milik user lain / read-only | `chmod -R u+rwX ~/NodelixcoreOS` (jangan pakai `sudo`) |
+| `ENOTFOUND registry.npmjs.org` / `EAI_AGAIN` / `ETIMEDOUT` | DNS atau jaringan bermasalah | coba `ping -c1 registry.npmjs.org`; ganti jaringan/hotspot; `npm config set registry https://registry.npmjs.org/`; ulangi `npm install` |
+| `EBADENGINE` / `Unsupported engine` | Node terlalu lama | `pkg upgrade nodejs-lts` lalu `node -v` (harus ≥ 18.17) |
+| `npm ERR! code ENOENT ... package.json` | perintah dijalankan di folder salah | `cd ~/NodelixcoreOS` dulu |
+
+Termux tanpa internet sama sekali: `npm install` tidak bisa jalan. Pilihannya
+(a) sambungkan jaringan sebentar saja untuk install, atau (b) salin folder
+`node_modules` utuh dari instalasi lain yang versinya sama.
+
+### Langkah 5 — bedakan modul pihak ketiga vs modul project
+
+* `Cannot find module 'express' / 'ws' / 'multer'` → dependensi belum terpasang (`npm install`).
+* `Cannot find module './tls'` atau `'/…/NodelixcoreOS/tls.js'` → **berkas project**
+  hilang/terpotong (ZIP tidak lengkap). Perbaiki dengan `git pull` atau unduh ulang repo.
+
+### Catatan
+
+* Jangan menjalankan `npm ci` di Termux: perintah itu menghapus `node_modules`
+  lalu memasang ulang dari lockfile; kalau jaringan/DNS bermasalah, hasilnya
+  `node_modules` kosong — persis gejalanya `Cannot find module`.
+* Jangan jalankan `npm install` dengan `sudo` atau sebagai root; berkas jadi milik
+  root dan `npm install` berikutnya gagal `EACCES`.
+* Setelah dependency berubah karena `git pull`, **selalu** jalankan `npm install`
+  lagi sebelum `npm start`.
