@@ -20,6 +20,10 @@ function ensureLocalTls() {
     const csr = path.join(dir, 'test-server.csr');
     const serverCert = path.join(dir, 'test-server.crt');
     const config = path.join(dir, 'server-san.cnf');
+    const caLeafConfig = path.join(dir, 'ca-leaf-san.cnf');
+    const clientOnlyConfig = path.join(dir, 'client-only-san.cnf');
+    const caLeafCert = path.join(dir, 'ca-leaf.crt');
+    const clientOnlyCert = path.join(dir, 'client-only.crt');
 
     try {
         run(['ecparam', '-name', 'prime256v1', '-genkey', '-noout', '-out', caKey]);
@@ -47,7 +51,7 @@ function ensureLocalTls() {
             '',
             '[ server_cert ]',
             'basicConstraints = critical,CA:FALSE',
-            'keyUsage = critical,digitalSignature,keyEncipherment',
+            'keyUsage = critical,digitalSignature',
             'extendedKeyUsage = serverAuth',
             'subjectAltName = @alt_names',
             '',
@@ -64,9 +68,44 @@ function ensureLocalTls() {
             '-extfile', config, '-extensions', 'server_cert'
         ]);
 
+        const altNames = [
+            '[ alt_names ]',
+            'DNS.1 = localhost',
+            'IP.1 = 127.0.0.1',
+            'IP.2 = ::1',
+            ''
+        ].join('\\n');
+        fs.writeFileSync(caLeafConfig, [
+            '[ server_cert ]',
+            'basicConstraints = critical,CA:TRUE,pathlen:0',
+            'keyUsage = critical,keyCertSign,cRLSign',
+            'extendedKeyUsage = serverAuth',
+            'subjectAltName = @alt_names',
+            '',
+            altNames
+        ].join('\\n'));
+        fs.writeFileSync(clientOnlyConfig, [
+            '[ server_cert ]',
+            'basicConstraints = critical,CA:FALSE',
+            'keyUsage = critical,digitalSignature',
+            'extendedKeyUsage = clientAuth',
+            'subjectAltName = @alt_names',
+            '',
+            altNames
+        ].join('\\n'));
+        for (const [output, ext] of [[caLeafCert, caLeafConfig], [clientOnlyCert, clientOnlyConfig]]) {
+            run([
+                'x509', '-req', '-in', csr, '-CA', caCert, '-CAkey', caKey,
+                '-CAcreateserial', '-out', output, '-days', '2', '-sha256',
+                '-extfile', ext, '-extensions', 'server_cert'
+            ]);
+        }
+
         cached = {
             dir,
             certPath: serverCert,
+            caLeafCertPath: caLeafCert,
+            clientOnlyCertPath: clientOnlyCert,
             keyPath: serverKey,
             caPath: caCert,
             ca: fs.readFileSync(caCert),
