@@ -76,8 +76,8 @@ const secLog = createSecurityLog({ quiet: true });
 secLog.flush().catch(() => { });
 
 // ================= HEADER KEAMANAN =================
-// Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
-// pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
+// Server berjalan melalui HTTP di LAN. Header keamanan di bawah tetap melindungi
+// browser dari beberapa kelas serangan, tetapi tidak mengenkripsi lalu lintas.
 app.disable('x-powered-by');
 // Hanya percayai alamat proxy yang dinyatakan eksplisit (IP/CIDR/keyword Express).
 // TRUST_PROXY=true sengaja tidak diterima karena mempercayai semua hop membuka spoofing.
