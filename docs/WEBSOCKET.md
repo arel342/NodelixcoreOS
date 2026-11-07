@@ -3,8 +3,8 @@
 Server memakai `ws` dengan `noServer: true`; koneksi hanya diterima setelah
 **HTTP Upgrade** lolos autentikasi.
 
-- URL: `wss://<host>:<port>/` (server lokal mengaktifkan TLS langsung; `ws://` hanya untuk rollback HTTP eksplisit)
-- Tidak ada token di query string. `wss://host/?token=...` **tidak didukung**.
+- URL: `ws://<host>:<port>/` (server HTTP lokal)
+- Tidak ada token di query string. `ws://host/?token=...` **tidak didukung**.
 - Path apa pun diterima setelah autentikasi berhasil (dashboard memakai `/`).
 
 ---
