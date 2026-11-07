@@ -50,7 +50,7 @@ function normOrigin(v) {
     if (!s || s.includes('|')) return '';
     try {
         const u = new URL(s);
-        if (!['http:', 'https:'].includes(u.protocol) || !u.hostname ||
+        if (u.protocol !== 'http:' || !u.hostname ||
             u.username || u.password || u.pathname !== '/' || u.search || u.hash) return '';
         // URL.origin memberi normalisasi host/port dan menolak authority ambigu.
         return u.origin.toLowerCase();
@@ -245,13 +245,10 @@ module.exports = function createMobileAuth({
             const n = normOrigin(o);
             if (n) out.add(n);
         }
-        // Header X-Forwarded-* tidak pernah menjadi sumber kepercayaan di sini:
-        // nilainya dapat dipalsukan kecuali berasal dari proxy tepercaya. Untuk
-        // TLS offload, isi MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
+        // Header X-Forwarded-* tidak digunakan; server ini menerima HTTP lokal langsung.
         const host = String((req.headers && req.headers.host) || '').split(',')[0].trim();
         if (host) {
-            const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
-            const n = normOrigin(`${proto}://${host}`);
+            const n = normOrigin(`http://${host}`);
             if (n) out.add(n);
         }
         return [...out];
