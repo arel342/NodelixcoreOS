@@ -1,7 +1,6 @@
 // ============================================================================
 // tests/server-integration.test.js — server.js SUNGGUHAN (proses anak) di port acak.
-// SEMUA TRAFIK HTTPS/WSS (TLS aktif). CA swasta dihasilkan di temp dir dan
-// dikonfidensi ke client test via https.Agent({ca}) / ws({ca}).
+// SEMUA TRAFIK HTTP/WS tanpa sertifikat.
 //
 // Menguji hal yang hanya bisa dibuktikan saat seluruh server berjalan:
 //   • login web lama -> cookie `sid` -> API data
@@ -9,7 +8,7 @@
 //   • register + challenge + verify ECDSA -> semua endpoint REST
 //   • file manager (folder, daftar, rename, hapus) di folder sementara
 //   • ESP32/ESP8266 (snapshot offline, validasi perintah relay) & firmware OTA (tolak file salah)
-//   • WebSocket (WSS): cookie & Bearer diterima, tanpa kredensial 401
+//   • WebSocket (WS): cookie & Bearer diterima, tanpa kredensial 401
 //   • restart proses: sesi Bearer tetap berlaku
 //
 // Lingkungan: tanpa perangkat keras, tanpa `su` (SU_BIN=/bin/sh), tanpa jaringan luar.
@@ -19,7 +18,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const https = require('https');
+const http = require('http');
 const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
@@ -32,11 +31,6 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nodelix-int-'));
 const storageDir = path.join(tmpRoot, 'storage');
 fs.mkdirSync(path.join(storageDir, 'upload'), { recursive: true });
 
-// Hasilkan CA + sertifikat server di temp dir sebelum server di-spawn, agar
-// client test (https.request/ws) dan server memakai CA yang sama.
-const { ensureCertificates } = require(path.join(ROOT, 'gen-certs'));
-const certResult = ensureCertificates({ dataDir: tmpRoot, quiet: true });
-const caPem = fs.readFileSync(certResult.caCertFile);
 
 // Berkas data milik server.js (data/mobile-*.json). Disimpan/dipulihkan agar
 // menjalankan tes tidak mengubah data pengguna yang sudah ada.
@@ -49,14 +43,14 @@ let port = 0;
 let base = '';
 let wsOpts = {};
 
-const agent = new https.Agent({ ca: caPem, rejectUnauthorized: true });
+
 
 function rawRequest(p, { method = 'GET', headers = {}, body } = {}) {
     return new Promise((resolve, reject) => {
-        const u = new URL('https://127.0.0.1:' + port + p);
-        const rq = https.request({
+        const u = new URL('http://127.0.0.1:' + port + p);
+        const rq = http.request({
             hostname: u.hostname, port: u.port,
-            path: u.pathname + u.search, method, headers, agent
+            path: u.pathname + u.search, method, headers
         }, res => {
             let data = ''; res.setEncoding('utf8'); res.on('data', d => data += d);
             res.on('end', () => {
@@ -88,7 +82,6 @@ function startServer(prt) {
             env: {
                 ...process.env,
                 PORT: String(prt),
-                TLS_DATA_DIR: tmpRoot, TLS_ENABLED: 'true',
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
                 SESSION_TTL_HOURS: '1',
@@ -144,8 +137,8 @@ async function boot() {
     for (let attempt = 0; attempt < 5; attempt++) {
         port = 20000 + Math.floor(Math.random() * 20000);
         child = await startServer(port);
-        base = `https://127.0.0.1:${port}`;
-        wsOpts = { ca: caPem, rejectUnauthorized: true };
+        base = `http://127.0.0.1:${port}`;
+        wsOpts = {};
         try { await waitReady(); return; }
         catch (e) { await stopServer(child); if (attempt === 4) throw e; }
     }
@@ -195,7 +188,7 @@ after(async () => {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
 });
 
-test('integrasi: server.js berjalan HTTPS dan API tanpa sesi ditolak 401 JSON', async () => {
+test('integrasi: server.js berjalan HTTP dan API tanpa sesi ditolak 401 JSON', async () => {
     const s = await req('/api/session');
     assert.equal(s.status, 200);
     assert.equal(s.body.authenticated, false);
@@ -328,9 +321,9 @@ test('integrasi: ECDSA mobile -> Bearer berlaku di seluruh API lama', async () =
     assert.equal(q.status, 400);
 });
 
-test('integrasi: WebSocket (WSS) menerima cookie & Bearer, menolak tanpa kredensial', async () => {
+test('integrasi: WebSocket (WS) menerima cookie & Bearer, menolak tanpa kredensial', async () => {
     const anon = await new Promise(resolve => {
-        const ws = new WebSocket(`wss://127.0.0.1:${port}`, wsOpts);
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, wsOpts);
         ws.on('unexpected-response', (_, r) => resolve(r.statusCode));
         ws.on('open', () => { ws.close(); resolve('open'); });
         ws.on('error', () => resolve('error'));
@@ -339,7 +332,7 @@ test('integrasi: WebSocket (WSS) menerima cookie & Bearer, menolak tanpa kredens
 
     const token = await mobileLogin();
     const frames = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ...wsOpts, headers: bearer(token) });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { ...wsOpts, headers: bearer(token) });
         const seen = new Set();
         ws.on('message', m => {
             const f = JSON.parse(String(m));
@@ -356,7 +349,7 @@ test('integrasi: WebSocket (WSS) menerima cookie & Bearer, menolak tanpa kredens
     const login = await post('/api/login', ADMIN);
     const cookie = String(login.headers.get('set-cookie')).split(';')[0];
     const withCookie = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ...wsOpts, headers: { Cookie: cookie } });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { ...wsOpts, headers: { Cookie: cookie } });
         ws.on('message', m => { ws.close(); resolve(JSON.parse(String(m)).type); });
         ws.on('error', reject);
     });
@@ -367,7 +360,7 @@ test('integrasi: monitor CPU/RAM berjalan — dashboard menerima SYSTEM berisi a
     const login = await post('/api/login', ADMIN);
     const cookie = String(login.headers.get('set-cookie')).split(';')[0];
     const frame = await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`wss://127.0.0.1:${port}`, { ...wsOpts, headers: { Cookie: cookie } });
+        const ws = new WebSocket(`ws://127.0.0.1:${port}`, { ...wsOpts, headers: { Cookie: cookie } });
         ws.on('message', m => {
             const f = JSON.parse(String(m));
             if (f.type === 'SYSTEM' && f.data && f.data.cpu != null && f.data.ram) { ws.close(); resolve(f.data); }
