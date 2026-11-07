@@ -22,6 +22,20 @@ test('TLS config: valid Root CA, certificate, key, and SAN are accepted', () => 
     assert.ok(options.cert);
 });
 
+test('TLS config: a CA certificate cannot be used as the server leaf', () => {
+    assert.throws(
+        () => loadTlsOptions(testEnv({ ...TEST_TLS.serverEnv, TLS_CERT_PATH: TEST_TLS.caLeafCertPath })),
+        /leaf certificate, bukan sertifikat CA/
+    );
+});
+
+test('TLS config: a client-only certificate is rejected for the HTTPS server', () => {
+    assert.throws(
+        () => loadTlsOptions(testEnv({ ...TEST_TLS.serverEnv, TLS_CERT_PATH: TEST_TLS.clientOnlyCertPath })),
+        /Extended Key Usage sertifikat server wajib memuat serverAuth/
+    );
+});
+
 test('TLS config: a hostname absent from SAN is rejected', () => {
     assert.throws(
         () => loadTlsOptions(testEnv({ ...TEST_TLS.serverEnv, TLS_SERVER_NAMES: 'wrong-name.example' })),
