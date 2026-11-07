@@ -225,32 +225,10 @@ function main() {
         }
     }
 
-    // ---------- 5. Transport (TLS / HTTP) ----------
+    // ---------- 5. Transport HTTP lokal ----------
     console.log('');
-    console.log('— Transport web (HTTP/HTTPS) —');
-    const tlsEnabled = isTrue(env('TLS_ENABLED', 'false'));
-    const allowHttp = !tlsEnabled && isTrue(env('TLS_ALLOW_HTTP', 'true'));
-    if (!tlsEnabled && !allowHttp) {
-        fail('Kombinasi TLS tidak valid', 'TLS_ENABLED=false tetapi TLS_ALLOW_HTTP=false',
-            'Set TLS_ALLOW_HTTP=true untuk HTTP di LAN, atau TLS_ENABLED=true + npm run gen-certs untuk HTTPS.');
-    } else if (tlsEnabled) {
-        line(OK, 'Mode transport', 'HTTPS (TLS_ENABLED=true)');
-        process.env.TLS_ENABLED = 'true';
-        for (const [k, val] of envMap) if (process.env[k] === undefined) process.env[k] = val;
-        try {
-            const tls = require(path.join(ROOT, 'tls.js'));
-            const info = tls.load();
-            line(OK, 'Sertifikat server', `berlaku sampai ${new Date(info.expiresAt).toISOString()}`);
-        } catch (e) {
-            const hint = e && e.code === 'CERT_MISSING'
-                ? 'Jalankan: npm run gen-certs'
-                : 'Buat ulang sertifikat: npm run gen-certs -- --renew';
-            fail('Sertifikat TLS bermasalah', (e && e.message) || String(e), hint +
-                '\n         Atau kembali ke HTTP: TLS_ENABLED=false dan TLS_ALLOW_HTTP=true di .env');
-        }
-    } else {
-        line(OK, 'Mode transport', 'HTTP plaintext di LAN (TLS_ENABLED=false, TLS_ALLOW_HTTP=true)');
-    }
+    console.log('— Transport web (HTTP) —');
+    line(OK, 'Mode transport', 'HTTP lokal (tanpa sertifikat)');
 
     // ---------- 6. Validasi keamanan yang sama dengan startup ----------
     console.log('');
