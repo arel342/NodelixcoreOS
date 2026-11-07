@@ -246,15 +246,13 @@ module.exports = function createMobileAuth({
             if (n) out.add(n);
         }
         // Header X-Forwarded-* tidak pernah menjadi sumber kepercayaan di sini:
-        // nilainya dapat dipalsukan oleh klien kecuali proxy benar-benar dikonfigurasi.
-        // Untuk TLS offload gunakan MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
+        // nilainya dapat dipalsukan kecuali berasal dari proxy tepercaya. Untuk
+        // TLS offload, isi MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
         const host = String((req.headers && req.headers.host) || '').split(',')[0].trim();
         if (host) {
             const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
-            for (const p of new Set([proto, 'http', 'https'])) {
-                const n = normOrigin(`${p}://${host}`);
-                if (n) out.add(n);
-            }
+            const n = normOrigin(`${proto}://${host}`);
+            if (n) out.add(n);
         }
         return [...out];
     }
