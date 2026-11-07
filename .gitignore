@@ -76,3 +76,12 @@ data/update-state.json
 data/update-state.json.tmp
 data/audit.log
 data/audit.log.*
+
+# Local TLS material (never commit private keys, CSRs, or runtime certificates)
+/certs/
+*.key
+*.csr
+*.srl
+*.p12
+*.pfx
+server-san.cnf
