@@ -245,8 +245,7 @@ Buat `.env`:
 cp .env.example .env
 ```
 
-Server hanya menggunakan **HTTP/WS** dan tidak memerlukan sertifikat. Hapus pengaturan
-pengaturan sertifikat lama dari `.env` jika masih ada.
+Server hanya menggunakan **HTTP/WS** dan tidak memerlukan sertifikat. Hapus pengaturan sertifikat lama dari `.env` jika masih ada.
 Gunakan HTTP hanya di LAN tepercaya: password dan token tidak dienkripsi.
 
 Jalankan:
@@ -818,7 +817,6 @@ Penyebab paling sering:
 | `Missing script: "start"` | jalankan dari folder project: `cd ~/NodelixcoreOS` |
 | `Cannot find module 'express'` | `npm install` |
 | `listen EADDRINUSE ... :3000` | server lama masih hidup: `pkill -f "node server.js"`, atau `PORT=3001` di `.env` |
-
 | `[Security] Validasi konfigurasi gagal` | ikuti alasan yang dicetak (mis. `ADMIN_PASSWORD` < 8 karakter) |
 | `SyntaxError` | Node < 18.17: perbarui Node, lalu `npm install` ulang |
 
