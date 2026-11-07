@@ -14,7 +14,7 @@ telah diperiksa terhadap kode dan diuji di `tests/`.
 
 | Item | Nilai |
 |---|---|
-| Base URL | `https://<IP-server>:<PORT>` (default `3000`); CA lokal harus dipercaya klien |
+| Base URL | `http://<IP-server>:<PORT>` (default `3000`, LAN tepercaya); HTTPS opsional melalui `TLS_ENABLED=true` |
 | Format | JSON (`Content-Type: application/json`), kecuali upload/hasil download |
 | Encoding | UTF-8 |
 | Autentikasi web | Cookie `sid` (`HttpOnly; SameSite=Lax`) |
@@ -76,7 +76,7 @@ Kesalahan pada jalur mobile:
 Contoh:
 
 ```bash
-curl --cacert data/ca/root-ca.crt -i -X POST https://192.168.1.10:3000/api/login \
+curl -i -X POST http://192.168.1.10:3000/api/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"rahasia"}'
 # HTTP/1.1 200 OK
@@ -169,7 +169,7 @@ Kemungkinan kesalahan:
   "nonce": "<Base64 32 byte>",
   "issuedAt": 1762041600000,
   "expiresAt": 1762041660000,
-  "serverOrigin": "https://192.168.1.10:3000",
+  "serverOrigin": "http://192.168.1.10:3000",
   "originCandidates": 3,
   "algorithm": "ECDSA_P256_SHA256",
   "ttlMs": 60000,
@@ -212,7 +212,7 @@ NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonce>|<timestampMillis>|<origin
   "expiresAt": 1762128000000,
   "deviceId": "ndlx-550e8400-e29b-41d4-a716-446655440000",
   "username": "admin",
-  "origin": "https://192.168.1.10:3000",
+  "origin": "http://192.168.1.10:3000",
   "message": "Authentication successful"
 }
 ```

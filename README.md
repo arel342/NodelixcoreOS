@@ -182,19 +182,19 @@ Untuk Android/Termux:
 Dengan port default:
 
 ```text
-https://localhost:3000
+http://localhost:3000
 ```
 
 Dari perangkat lain dalam jaringan:
 
 ```text
-https://IP-SERVER:3000
+http://IP-SERVER:3000
 ```
 
 Contoh:
 
 ```text
-https://192.168.1.20:3000
+http://192.168.1.20:3000
 ```
 
 ## Menjalankan di Termux
@@ -245,13 +245,17 @@ Buat `.env`:
 cp .env.example .env
 ```
 
-Buat sertifikat HTTPS lokal (tidak memerlukan OpenSSL CLI):
+Web default memakai **HTTP/WS** dan tidak memerlukan sertifikat. Untuk instalasi
+lama, ubah `.env` menjadi berikut, lalu restart server:
 
-```bash
-npm run gen-certs
+```dotenv
+TLS_ENABLED=false
+TLS_ALLOW_HTTP=true
 ```
 
-Simpan salinan `data/ca/root-ca.crt` untuk dipasang sebagai CA tepercaya di browser dan aplikasi Android. Jangan membagikan `data/ca/root-ca.key`. Panduan: [`docs/HTTPS-LOCAL.md`](docs/HTTPS-LOCAL.md).
+Gunakan HTTP hanya di LAN tepercaya: password dan token tidak dienkripsi.
+HTTPS tetap tersedia secara opsional dengan `TLS_ENABLED=true` dan
+`npm run gen-certs`; lihat [`docs/HTTPS-LOCAL.md`](docs/HTTPS-LOCAL.md).
 
 Jalankan:
 
@@ -263,7 +267,7 @@ Setelah jalan, terminal menampilkan alamat server, mis.:
 
 ```text
 =================================
-Setup awal: https://192.168.1.20:3000/setup.html
+Setup awal: http://192.168.1.20:3000/setup.html
 - Buka alamat itu di HP/PC (satu WiFi dengan Termux).
 - Di halaman setup: buat username & password, isi IP/port/kunci API ESP32
   dan ESP8266, lalu isi bot Telegram. .env diisi otomatis.
@@ -682,7 +686,7 @@ Cara kerjanya:
    request baru ke GitHub — dan langsung menampilkan notifikasinya.
 
 Notifikasi Telegram berisi commit terpasang, commit terbaru, pesan commit, tautan
-repositori, tautan dashboard (`https://<IP-LAN>:<port>/#update`), dan waktu deteksi.
+repositori, tautan dashboard (`http://<IP-LAN>:<port>/#update`), dan waktu deteksi.
 Satu notifikasi dikirim per commit; commit yang sama tidak dikirim ulang walau server
 dimulai ulang. Kalau Telegram sedang tidak bisa dihubungi, notifikasi disimpan sebagai
 *tertunda* dan dicoba ulang otomatis. Kalau GitHub tidak tersedia atau membatasi permintaan
@@ -754,21 +758,21 @@ Kontrak lengkap beserta contoh request/response: [`docs/API.md`](docs/API.md) da
 perbaikannya: [`docs/SERVER_BUG_AUDIT.md`](docs/SERVER_BUG_AUDIT.md) dan
 [`docs/SERVER_BUG_FIX_REPORT.md`](docs/SERVER_BUG_FIX_REPORT.md).
 
-Contoh login mobile dengan `curl` (setelah registrasi). Sertifikat CA lokal digunakan dengan opsi `--cacert data/ca/root-ca.crt`:
+Contoh login mobile dengan `curl` melalui HTTP di LAN tepercaya (setelah registrasi):
 
 ```bash
 # 1. minta challenge
-curl --cacert data/ca/root-ca.crt -s -X POST https://192.168.1.10:3000/api/mobile/auth/challenge \
+curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/challenge \
   -H 'Content-Type: application/json' -d '{"deviceId":"ndlx-..."}'
 
 # 2. tanda tangani "NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonce>|<ts>|<origin>"
 #    dengan kunci ECDSA P-256 (SHA256withECDSA, DER, Base64), lalu:
-curl --cacert data/ca/root-ca.crt -s -X POST https://192.168.1.10:3000/api/mobile/auth/verify \
+curl -s -X POST http://192.168.1.10:3000/api/mobile/auth/verify \
   -H 'Content-Type: application/json' \
   -d '{"deviceId":"ndlx-...","challengeId":"chl_...","timestamp":1762041612345,"signatureBase64":"MEUCIQ..."}'
 
 # 3. pakai token pada API lain
-curl --cacert data/ca/root-ca.crt -s https://192.168.1.10:3000/api/system -H "Authorization: Bearer $TOKEN"
+curl -s http://192.168.1.10:3000/api/system -H "Authorization: Bearer $TOKEN"
 ```
 
 ## Update Project
@@ -846,9 +850,9 @@ Untuk deployment ke internet, pertimbangkan:
 
 ### Batasan yang harus dipahami
 
-* Server **tidak** menyediakan HTTPS sendiri. Jalankan di belakang reverse proxy
-  (Caddy/Nginx) dengan sertifikat lokal untuk `https`/`wss`; untuk LAN tepercaya, HTTP
-  tetap didukung sesuai kebutuhan Termux.
+* Server default memakai HTTP/WS untuk LAN tepercaya. Untuk jaringan tidak
+  tepercaya, aktifkan HTTPS internal (`TLS_ENABLED=true`) atau gunakan reverse
+  proxy TLS (Caddy/Nginx). Jangan kirim password/token melalui HTTP di internet.
 * Sesi dashboard web tetap di memori: restart server = login ulang di browser.
   Hanya sesi mobile yang persisten.
 * Server tidak pernah menjalankan `git pull`/`git reset` otomatis; update tetap manual

@@ -2,7 +2,7 @@
 // ============================================================================
 // tls.js — terminasi TLS internal untuk NodelixcoreOS (Private CA + HTTPS/WSS).
 //
-// Server berjalan HTTPS langsung memakai node:https. TLS 1.2 minimum (TLS 1.3
+// Server default HTTP untuk LAN tepercaya. HTTPS opsional: TLS 1.2 minimum (TLS 1.3
 // diprioritaskan bila kompatibel). Sertifikat server diterbitkan oleh Private CA
 // lokal; kunci CA root disimpan TERPILAH dari kunci server dan TIDAK pernah masuk
 // repository.
@@ -17,7 +17,7 @@
 // Buat sertifikat:  npm run gen-certs   (atau: node gen-certs.js)
 //
 // Config (env, lihat .env.example):
-//   TLS_ENABLED        default true    false = HTTP eksplisit (harus TLS_ALLOW_HTTP=true)
+//   TLS_ENABLED        default false   true = HTTPS dengan sertifikat lokal
 //   TLS_DATA_DIR       default <repo>/data
 //   TLS_CERT_DIR       default <data>/certs
 //   TLS_CA_DIR         default <data>/ca
@@ -28,7 +28,7 @@
 //   TLS_SAN            tambahan SAN, comma, mis. "DNS:nodelix.local,IP:10.0.0.5"
 //   NODELIX_HOSTS      nama host stabil (comma) — SAN DNS tambahan
 //   TLS_AUTOGEN        default false   true = buat CA+sertifikat otomatis bila belum ada
-//   TLS_ALLOW_HTTP     default false   hanya dengan TLS_ENABLED=false (rollback/debug)
+//   TLS_ALLOW_HTTP     default true    false = larang HTTP saat TLS nonaktif
 // ============================================================================
 const https = require('https');
 const http = require('http');
@@ -62,8 +62,8 @@ function paths(dataDirOverride) {
 }
 
 // ---------- Config ----------
-function isEnabled() { return String(E('TLS_ENABLED', 'true')).toLowerCase() !== 'false'; }
-function allowHttp() { return !isEnabled() && String(E('TLS_ALLOW_HTTP', 'false')).toLowerCase() === 'true'; }
+function isEnabled() { return String(E('TLS_ENABLED', 'false')).toLowerCase() !== 'false'; }
+function allowHttp() { return !isEnabled() && String(E('TLS_ALLOW_HTTP', 'true')).toLowerCase() === 'true'; }
 function scheme() { return isEnabled() ? 'https' : 'http'; }
 function minVersion() { return E('TLS_MIN_VERSION', 'TLSv1.2'); }
 function certDays() { return Math.max(1, Math.min(3650, Math.floor(Number(E('TLS_CERT_DAYS', '825'))) || 825)); }
@@ -138,7 +138,8 @@ function readCert(p) {
 // Tolak: berkas hilang, kedaluwarsa, kunci tidak cocok, rantai CA gagal.
 // `p` opsional: objek paths() (dipakai ensureCertificates dengan dataDir terpisah).
 function load(p) {
-    if (!isEnabled()) return null;
+    // Explicit paths also validate certificates generated while HTTP is active.
+    if (!isEnabled() && !p) return null;
     const pathsObj = p || paths();
     if (!fs.existsSync(pathsObj.certFile) || !fs.existsSync(pathsObj.keyFile)) {
         throw new TlsError('Sertifikat server belum dibuat. Jalankan: npm run gen-certs', 'CERT_MISSING');
@@ -262,24 +263,28 @@ function writeHttpsRequired(socket) {
     } catch { /* klien sudah pergi */ }
 }
 
-// Buat server. Default HTTPS dengan deteksi protokol: port TLS hanya menerima
+// Buat server. Default HTTP; saat TLS diaktifkan, port TLS hanya menerima
 // ClientHello (0x16); permintaan plaintext HTTP dijawab 400 "HTTPS required"
-// (bukan diam-diam diputus). TLS_ENABLED=false hanya bila TLS_ALLOW_HTTP=true.
+// (bukan diam-diam diputus). TLS_ALLOW_HTTP=false melarang mode HTTP.
 function createServer(app, timeouts = {}) {
     if (!isEnabled()) {
         if (!allowHttp()) {
             throw new TlsError(
                 'TLS dinonaktifkan (TLS_ENABLED=false) tetapi TLS_ALLOW_HTTP tidak aktif.\n' +
-                'Server tidak akan berjalan HTTP terbuka tanpa perlindungan. Aktifkan TLS kembali atau, untuk rollback terkendali, set TLS_ENABLED=false TLS_ALLOW_HTTP=true secara eksplisit.',
+                'Aktifkan TLS atau izinkan HTTP untuk LAN tepercaya dengan TLS_ALLOW_HTTP=true.',
                 'HTTP_FORBIDDEN'
             );
         }
         console.warn('\n' + '='.repeat(64));
         console.warn('[TLS] ⚠  PERINGATAN BESAR: TLS DIMATIKAN. Server berjalan HTTP PLAINTEXT.');
         console.warn('[TLS]   Semua trafik (termasuk password & token) terkirim tanpa enkripsi.');
-        console.warn('[TLS]   Ini hanya untuk rollback/debug terkendali. Aktifkan TLS segera.');
+        console.warn('[TLS]   Gunakan hanya di LAN tepercaya; jangan ekspos HTTP ke internet.');
         console.warn('='.repeat(64) + '\n');
-        return http.createServer(app);
+        const server = http.createServer(app);
+        if (timeouts.requestTimeout != null) server.requestTimeout = timeouts.requestTimeout;
+        if (timeouts.headersTimeout != null) server.headersTimeout = timeouts.headersTimeout;
+        if (timeouts.keepAliveTimeout != null) server.keepAliveTimeout = timeouts.keepAliveTimeout;
+        return server;
     }
     const opts = tlsOptions();
     // http.Server hanya untuk memarser HTTP dari socket TLS yang sudah dibuka.
