@@ -278,6 +278,4 @@ origin).
 | Path traversal di file manager | Normalisasi + pemeriksaan symlink (sudah ada) |
 | Penyadapan jaringan | Listener server hanya HTTPS/WSS; validasi CA dan hostname tetap wajib pada klien |
 
-Server Node.js sekarang menyediakan HTTPS/WSS langsung dengan minimum TLS 1.2. Konfigurasikan Private CA dan allowlist subnet LAN sebelum startup. Android harus mempercayai CA publik lokal dan mempertahankan hostname verification. Lihat [panduan HTTPS lokal](LOCAL-HTTPS.md). di belakang Caddy/Nginx dengan sertifikat lokal, atau terima
-risiko penyadapan pada jaringan yang tidak tepercaya. Jangan meneruskan port server ke
-internet tanpa TLS.
+Server Node.js sekarang menyediakan HTTPS/WSS langsung dengan minimum TLS 1.2. Konfigurasikan Private CA dan allowlist subnet LAN sebelum startup. Android harus mempercayai CA publik lokal dan mempertahankan hostname verification. Lihat [panduan HTTPS lokal](LOCAL-HTTPS.md). Jangan meneruskan port server ke internet; server ini ditujukan untuk jaringan lokal.
