@@ -149,8 +149,13 @@ function load(p) {
     const key = crypto.createPrivateKey(keyPem);
 
     // Kedaluwarsa.
+    const now = Date.now();
+    const validFrom = new Date(cert.validFrom).getTime();
     const expiresAt = new Date(cert.validTo).getTime();
-    if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+    if (!Number.isFinite(validFrom) || validFrom > now) {
+        throw new TlsError(`Sertifikat server belum berlaku (${cert.validFrom}). Periksa jam sistem atau buat ulang sertifikat.`, 'CERT_NOT_YET_VALID');
+    }
+    if (!Number.isFinite(expiresAt) || expiresAt <= now) {
         throw new TlsError(`Sertifikat server kedaluwarsa (${cert.validTo}). Jalankan: npm run gen-certs -- --renew`, 'CERT_EXPIRED');
     }
     // Kunci privat cocok dengan sertifikat (X509Certificate.checkPrivateKey).
@@ -164,8 +169,17 @@ function load(p) {
     let caPem = null;
     if (fs.existsSync(pathsObj.caCertFile)) {
         const ca = readCert(pathsObj.caCertFile);
-        try { cert.checkIssued(ca); } catch { throw new TlsError('Sertifikat tidak diterbitkan oleh CA tepercaya.', 'CA_MISMATCH'); }
-        try { ca.verify(cert.publicKey); } catch { throw new TlsError('Verifikasi tanda tangan rantai CA gagal.', 'CA_VERIFY_FAILED'); }
+        // X509Certificate.checkIssued()/verify() return booleans; they do not
+        // throw on a failed check. Verify the leaf with the CA public key.
+        if (!ca.ca || !ca.checkIssued(ca) || !ca.verify(ca.publicKey)) {
+            throw new TlsError('Root CA tidak valid atau tanda tangan self-signed gagal.', 'CA_INVALID');
+        }
+        if (!cert.checkIssued(ca)) {
+            throw new TlsError('Issuer sertifikat server tidak cocok dengan CA tepercaya.', 'CA_MISMATCH');
+        }
+        if (!cert.verify(ca.publicKey)) {
+            throw new TlsError('Verifikasi tanda tangan sertifikat server gagal.', 'CA_VERIFY_FAILED');
+        }
         caPem = fs.readFileSync(pathsObj.caCertFile);
     }
     // SAN harus ada (setidaknya satu).
