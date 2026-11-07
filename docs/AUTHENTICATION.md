@@ -127,7 +127,7 @@ NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonceBase64>|<timestampMillis>|<
 - `deviceId`, `challengeId`, `nonce` di-trim.
 - `timestampMillis` = waktu perangkat (epoch ms).
 - `origin` = `scheme://host:port` server seperti yang diketik di aplikasi, huruf kecil,
-  tanpa garis miring di akhir (mis. `https://192.168.1.10:3000`).
+  tanpa garis miring di akhir (mis. `http://192.168.1.10:3000`).
 
 Contoh Node.js (untuk pengujian/manual):
 
@@ -200,7 +200,7 @@ satu server tidak bisa dipakai ulang di server lain. Aplikasi tidak mengirim `or
 saat `verify`, sehingga server menyusun kandidat dari:
 
 1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — **disarankan** jika
-   server berada di balik reverse proxy TLS,
+   server menggunakan origin HTTP lokal,
 2. `Host` + skema transport yang benar-benar diterima server (`https` untuk HTTPS,
    `http` untuk mode default HTTP di LAN tepercaya),
 3. `serverOrigin` yang dikirim klien pada body `verify` (bila ada).
@@ -219,7 +219,7 @@ proxy_set_header X-Forwarded-Proto $scheme;
 Atau sederhanakan dengan `.env`:
 
 ```env
-MOBILE_AUTH_SERVER_ORIGIN=https://192.168.1.10:8443
+MOBILE_AUTH_SERVER_ORIGIN=http://192.168.1.10:3000
 ```
 
 ---
@@ -278,9 +278,7 @@ origin).
 | CSRF dari situs lain | Cookie `SameSite=Lax` + penolakan `Origin` lintas host untuk metode non-GET |
 | Clickjacking | `X-Frame-Options: SAMEORIGIN` + `frame-ancestors 'self'` |
 | Path traversal di file manager | Normalisasi + pemeriksaan symlink (sudah ada) |
-| Penyadapan jaringan | **HTTP hanya untuk LAN tepercaya.** Gunakan reverse proxy TLS (`https/wss`) di luar LAN |
+| Penyadapan jaringan | **HTTP hanya untuk LAN tepercaya.** Trafik tidak dienkripsi |
 
-Catatan jujur: server ini **tidak** menyediakan enkripsi transport sendiri. Pada
-Termux/Android, jalankan di belakang Caddy/Nginx dengan sertifikat lokal, atau terima
-risiko penyadapan pada jaringan yang tidak tepercaya. Jangan meneruskan port server ke
-internet tanpa TLS.
+Catatan: server ini berjalan melalui HTTP tanpa enkripsi transport. Gunakan hanya pada
+jaringan lokal tepercaya. Jangan meneruskan port server langsung ke internet.
