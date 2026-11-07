@@ -68,6 +68,14 @@ data/mobile-sessions.json.*.tmp
 data/mobile-devices.json
 data/mobile-devices.json.*.tmp
 
+# TLS — Private CA + sertifikat server ( TIDAK Boleh masuk Git )
+# data/ca/ berisi kunci privat CA root; data/certs/ berisi kunci privat server.
+data/ca/
+data/certs/
+*.pem
+*.key
+*.srl
+
 # Runtime state (riwayat AI, jadwal, audit, riwayat sensor)
 data/ai-history.json
 data/schedules.json
@@ -76,3 +84,5 @@ data/update-state.json
 data/update-state.json.tmp
 data/audit.log
 data/audit.log.*
+data/security.log
+data/security.log.*

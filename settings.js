@@ -161,9 +161,16 @@ module.exports = ({ app, saveEnv, esp32, door, telegram, ai, auth }) => {
     function snapshot() {
         const out = {};
         for (const g of GROUPS) out[g] = readGroup(g);
+        let tlsInfo = null;
+        try {
+            const tls = require('./tls');
+            tlsInfo = { scheme: tls.scheme(), enabled: tls.isEnabled(), describe: tls.describe() };
+        } catch { /* tls tidak tersedia */ }
         out.info = {
             port: N('PORT', 3000),
             ips: ips(),
+            scheme: tlsInfo ? tlsInfo.scheme : 'http',
+            tls: tlsInfo ? tlsInfo.describe : null,
             lang: E('LANGUAGE', 'id'),
             version: version(),
             node: process.version,
