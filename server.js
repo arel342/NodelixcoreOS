@@ -886,5 +886,15 @@ setWebEnabled(true).then(() => {
     else startDevices();
 }).catch(e => {
     console.error('[Web] Gagal menjalankan server:', e.message);
+    // Petunjuk langsung untuk penyebab paling sering: port sudah dipakai server lama.
+    if (e && e.code === 'EADDRINUSE') {
+        console.error(`[Web] Port ${PORT} sedang dipakai proses lain (server lama masih berjalan?).`);
+        console.error('[Web] Hentikan proses lama: pkill -f "node server.js"');
+        console.error(`[Web] Cek pemakai port: ss -ltnp 2>/dev/null | grep ${PORT}`);
+        console.error('[Web] Atau ganti port di .env, mis. PORT=3001, lalu jalankan ulang.');
+    } else if (e && e.code === 'EACCES') {
+        console.error(`[Web] Tidak berhak memakai port ${PORT} (port < 1024 butuh root). Gunakan PORT >= 1024.`);
+    }
+    console.error('[Web] Periksa lingkungan dengan: npm run doctor');
     process.exitCode = 1;
 });
