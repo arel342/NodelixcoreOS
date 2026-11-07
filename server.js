@@ -1,10 +1,11 @@
 const express = require('express');
-const http = require('http');
+const https = require('https');
 const WebSocket = require('ws');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
+const { loadTlsOptions } = require('./tls-config');
+const { createNetworkGuard } = require('./network-allowlist');
 const crypto = require('crypto');
 
 // ================= .env (tanpa dependency tambahan) =================
@@ -34,7 +35,12 @@ function saveEnv(key, value) {
 // Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
 
 const app = express();
-const server = http.createServer(app);
+// Sertifikat, private key, Root CA, dan SAN diverifikasi sebelum port dibuka.
+// Tidak tersedia mode HTTP fallback.
+const tlsOptions = loadTlsOptions(env);
+const networkGuard = createNetworkGuard(env('LOCAL_ALLOWED_CIDRS', '127.0.0.1/32,::1/128'));
+const BIND_HOST = env('BIND_HOST', '0.0.0.0');
+const server = https.createServer(tlsOptions, app);
 const wss = new WebSocket.Server({ noServer: true, maxPayload: 1024 * 1024 });
 // Upload/kompres besar tidak boleh terpotong timeout bawaan Node
 // Batas waktu request tetap aktif; dapat dinaikkan untuk upload besar, maksimum 1 jam.
@@ -62,8 +68,8 @@ const loginLimiter = createLimiter({ max: 5, blockMs: 5 * 60 * 1000 });
 setInterval(auth.flush, 60000).unref();
 
 // ================= HEADER KEAMANAN =================
-// Server ini memang boleh berjalan lewat HTTP di LAN (Termux). Header di bawah bukan
-// pengganti HTTPS; lihat README bagian Keamanan untuk risiko jaringan.
+// HTTPS ditangani langsung oleh Node.js. Akses jaringan dibatasi oleh CIDR sumber
+// pada socket, bukan X-Forwarded-For dari klien.
 app.disable('x-powered-by');
 // Hanya percayai alamat proxy yang dinyatakan eksplisit (IP/CIDR/keyword Express).
 // TRUST_PROXY=true sengaja tidak diterima karena mempercayai semua hop membuka spoofing.
@@ -89,6 +95,10 @@ app.use((req, res, next) => {
     }
     next();
 });
+
+// Tolak semua koneksi yang bukan berasal dari CIDR LAN yang dikonfigurasi.
+// Pemeriksaan memakai remoteAddress socket dan tidak mempercayai forwarded headers.
+app.use(networkGuard.middleware);
 
 // Tolak token yang dikirim lewat URL (bocor ke log proxy, riwayat, dsb).
 app.use('/api', (req, res, next) => {
@@ -179,6 +189,28 @@ function closeSocketsFor(evt) {
 auth.setRevokeHandler(closeSocketsFor);
 
 server.on('upgrade', (req, socket, head) => {
+    if (!networkGuard.isAllowed(req.socket && req.socket.remoteAddress)) {
+        try { socket.write('HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+        return socket.destroy();
+    }
+    // Origin browser harus same-origin HTTPS. Klien native boleh tidak mengirim Origin.
+    const rawOrigin = req.headers && req.headers.origin;
+    if (rawOrigin) {
+        let allowedOrigin = false;
+        try {
+            const parsedOrigin = new URL(String(rawOrigin));
+            const sameOrigin = parsedOrigin.protocol === 'https:' && parsedOrigin.host.toLowerCase() === String(req.headers.host || '').toLowerCase();
+            const trustedOrigins = String(env('TRUSTED_ORIGINS', '')).split(',').map(value => value.trim()).filter(Boolean);
+            const explicitlyTrusted = trustedOrigins.some(value => {
+                try { return new URL(value).origin.toLowerCase() === parsedOrigin.origin.toLowerCase(); } catch { return false; }
+            });
+            allowedOrigin = sameOrigin || (parsedOrigin.protocol === 'https:' && explicitlyTrusted);
+        } catch { allowedOrigin = false; }
+        if (!allowedOrigin) {
+            try { socket.write('HTTP/1.1 403 Forbidden\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+            return socket.destroy();
+        }
+    }
     // Socket mentah setelah upgrade menjadi tanggung jawab kita: tanpa listener 'error',
     // klien yang memutus koneksi di tengah handshake (ECONNRESET/EPIPE) akan melempar
     // exception tak tertangani yang mematikan seluruh server.
@@ -206,7 +238,7 @@ server.on('upgrade', (req, socket, head) => {
         ? [...wss.clients].filter(ws => ws.auth && ws.auth.kind === 'mobile' && ws.auth.deviceId === r.deviceId).length
         : 0;
     if (wss.clients.size >= maxWsTotal || totalForIp >= maxWsPerIp || totalForDevice >= maxWsPerDevice) {
-        try { socket.write('HTTP/1.1 429 Too Many Requests\\r\\nConnection: close\\r\\nContent-Length: 0\\r\\n\\r\\n'); } catch { }
+        try { socket.write('HTTP/1.1 429 Too Many Requests\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); } catch { }
         return socket.destroy();
     }
     try {
@@ -221,6 +253,7 @@ server.on('upgrade', (req, socket, head) => {
             ws.auth = r;                       // identitas sesi disimpan per koneksi
             ws.clientIp = clientIp;
             ws.isAlive = true;
+            ws.on('pong', () => { ws.isAlive = true; });
             wss.emit('connection', ws, req);
         });
     } catch (e) {
@@ -241,6 +274,16 @@ const wsWatch = setInterval(() => {
     }
 }, 30000);
 if (wsWatch.unref) wsWatch.unref();
+
+// Heartbeat mendeteksi socket WebSocket yang putus tanpa aktivitas aplikasi.
+const wsHeartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+        if (ws.isAlive === false) { try { ws.terminate(); } catch { } continue; }
+        ws.isAlive = false;
+        try { ws.ping(); } catch { try { ws.terminate(); } catch { } }
+    }
+}, 30000);
+if (wsHeartbeat.unref) wsHeartbeat.unref();
 
 // ================= MIDDLEWARE =================
 // ================= SETUP AWAL (wizard di browser) =================
@@ -438,7 +481,7 @@ function setWebEnabled(enabled) {
         if (server.listening) { webRunning = true; return resolve(true); }
         const onError = e => { server.off('error', onError); reject(e); };
         server.once('error', onError);
-        server.listen(PORT, '0.0.0.0', () => {
+        server.listen(PORT, BIND_HOST, () => {
             server.off('error', onError);
             webRunning = true;
             console.log(`[Web] Server aktif kembali di port ${PORT}.`);
@@ -451,7 +494,7 @@ function setWebEnabled(enabled) {
         server.close(e => {
             webRunning = false;
             if (e) return reject(e);
-            console.log('[Web] HTTP dan WebSocket dimatikan melalui Telegram; layanan perangkat tetap aktif.');
+            console.log('[Web] HTTPS dan WSS dimatikan melalui Telegram; layanan perangkat tetap aktif.');
             resolve(false);
         });
         if (server.closeAllConnections) server.closeAllConnections();
@@ -734,25 +777,27 @@ app.use((err, req, res, next) => {
 });
 
 function printBanner() {
-    const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)
-        .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
-    const list = ips.length ? ips : ['localhost'];
+    const hosts = String(env('TLS_SERVER_NAMES', 'localhost')).split(',').map(value => value.trim()).filter(Boolean);
+    const list = hosts.length ? hosts : ['localhost'];
     const port = env('PORT', 3000);
+    const formatHost = host => host.includes(':') && !host.startsWith('[') ? '[' + host + ']' : host;
     console.log('=================================');
     if (setupRequired()) {
-        list.forEach(ip => console.log(`Setup awal: http://${ip}:${port}/setup.html`));
-        console.log('- Buka alamat itu di HP/PC (satu WiFi dengan Termux).');
-        console.log('- Di halaman setup: buat username & password, isi IP/port/kunci API ESP32');
-        console.log('  dan ESP8266, isi bot Telegram, lalu isi kunci API Gemini (untuk /ai).');
-        console.log('  Semua nilai di atas ditulis otomatis ke .env.');
-        console.log('- Setelah selesai, dashboard bisa dibuka di http://' + list[0] + ':' + port);
+        list.forEach(host => console.log('Setup awal: https://' + formatHost(host) + ':' + port + '/setup.html'));
+        console.log('- Buka hostname HTTPS tersebut dari perangkat pada jaringan lokal yang diizinkan.');
+        console.log('- Pastikan Root CA lokal dipercaya perangkat klien sebelum membuka halaman setup.');
+        console.log('- Di halaman setup: buat username & password, isi konfigurasi ESP32/ESP8266, Telegram, dan Gemini.');
+        console.log('- Setelah selesai, dashboard dapat dibuka melalui HTTPS pada hostname yang sama.');
     } else {
-        list.forEach(ip => console.log(`Server aktif: http://${ip}:${port}`));
+        list.forEach(host => console.log('Server aktif: https://' + formatHost(host) + ':' + port));
     }
-    console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
-    console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);
-    console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-3.5-flash-lite') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
-    storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
+    console.log('Jaringan diizinkan: ' + String(env('LOCAL_ALLOWED_CIDRS', '127.0.0.1/32,::1/128')));
+    console.log('Bind              : ' + BIND_HOST + ':' + port);
+    console.log('TLS               : minimum ' + tlsOptions.minVersion);
+    console.log('ESP32       : http://' + env('ESP32_IP', '(belum diisi)') + ':' + env('ESP32_PORT', 80));
+    console.log('Pintu RFID  : http://' + env('DOOR_IP', '(belum diisi)') + ':' + env('DOOR_PORT', 80));
+    console.log('AI Agent    : ' + (env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-3.5-flash-lite') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'));
+    storage.status().then(st => console.log(st.ready ? 'Penyimpanan : ' + st.root + ' (siap, mode ' + st.mode + ')' : 'PENYIMPANAN BELUM SIAP: ' + st.message));
     console.log('=================================');
 }
 
