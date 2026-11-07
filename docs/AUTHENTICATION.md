@@ -206,18 +206,10 @@ saat `verify`, sehingga server menyusun kandidat dari:
 
 Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat server-side. Pada konfigurasi langsung tanpa override, listener HTTPS hanya menghasilkan kandidat HTTPS. Nonce tetap sekali pakai, sehingga memasukkan origin eksplisit tidak membuka replay.
 
-Contoh reverse proxy (Caddy/Nginx) yang meneruskan header:
-
-```nginx
-proxy_set_header Host $host:$server_port;
-proxy_set_header X-Forwarded-Host $host:$server_port;
-proxy_set_header X-Forwarded-Proto $scheme;
-```
-
-Atau sederhanakan dengan `.env`:
+Untuk deployment langsung dengan HTTPS Node.js, konfigurasi ini biasanya **dibiarkan kosong**. Isi hanya bila server benar-benar melayani beberapa hostname HTTPS yang valid dan setiap hostname tercantum pada SAN sertifikat. Jangan masukkan origin `http://` pada koneksi TLS; server mengabaikan override HTTP ketika socket terenkripsi.
 
 ```env
-MOBILE_AUTH_SERVER_ORIGIN=https://192.168.1.10:8443
+MOBILE_AUTH_SERVER_ORIGIN=https://nodelixcoreos.local:3000
 ```
 
 ---
@@ -256,7 +248,7 @@ origin).
 | `MOBILE_CHALLENGE_SKEW_MS` | `60000` | Toleransi selisih jam perangkat |
 | `MOBILE_MAX_PENDING_CHALLENGES` | `2000` | Batas challenge tersimpan di memori |
 | `MOBILE_MAX_SESSIONS_PER_DEVICE` | `10` | Batas sesi aktif per perangkat (1–100). Sesi terlama dicabut otomatis saat batas terlampaui |
-| `MOBILE_AUTH_SERVER_ORIGIN` | *(kosong)* | Origin eksplisit (dipisah koma) untuk reverse proxy |
+| `MOBILE_AUTH_SERVER_ORIGIN` | *(kosong)* | Origin HTTPS tambahan yang dinyatakan eksplisit server (hostname harus cocok dengan SAN) |
 | `SESSION_TTL_HOURS` | `12` | Masa berlaku cookie dashboard |
 | `JSON_BODY_LIMIT` | `512kb` | Batas body JSON |
 | `UPLOAD_MAX_MB` | `2048` | Batas satu berkas upload (`0` = tanpa batas) |
