@@ -239,7 +239,7 @@ Install dependency:
 npm install
 ```
 
-Buat `.env`: 
+Buat `.env`:
 
 ```bash
 cp .env.example .env
@@ -251,7 +251,7 @@ Buat sertifikat HTTPS lokal (tidak memerlukan OpenSSL CLI):
 npm run gen-certs
 ```
 
-Simpan salinan `data/ca/root-ca.crt` untuk dipasang sebagai CA tepercaya di browser dan aplikasi Android. Jangan membagikan `data/ca/root-ca.key`.
+Simpan salinan `data/ca/root-ca.crt` untuk dipasang sebagai CA tepercaya di browser dan aplikasi Android. Jangan membagikan `data/ca/root-ca.key`. Panduan: [`docs/HTTPS-LOCAL.md`](docs/HTTPS-LOCAL.md).
 
 Jalankan:
 
@@ -682,7 +682,7 @@ Cara kerjanya:
    request baru ke GitHub — dan langsung menampilkan notifikasinya.
 
 Notifikasi Telegram berisi commit terpasang, commit terbaru, pesan commit, tautan
-repositori, tautan dashboard (`http://<IP-LAN>:<port>/#update`), dan waktu deteksi.
+repositori, tautan dashboard (`https://<IP-LAN>:<port>/#update`), dan waktu deteksi.
 Satu notifikasi dikirim per commit; commit yang sama tidak dikirim ulang walau server
 dimulai ulang. Kalau Telegram sedang tidak bisa dihubungi, notifikasi disimpan sebagai
 *tertunda* dan dicoba ulang otomatis. Kalau GitHub tidak tersedia atau membatasi permintaan
