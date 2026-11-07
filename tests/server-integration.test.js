@@ -15,6 +15,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
+const net = require('node:net');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -163,6 +164,29 @@ after(async () => {
         } catch { }
     }
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+});
+
+test('transport: HTTP plaintext tidak dilayani pada port HTTPS', async () => {
+    const received = await new Promise(resolve => {
+        const socket = net.connect(port, '127.0.0.1');
+        const chunks = [];
+        let settled = false;
+        const finish = () => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve(Buffer.concat(chunks));
+        };
+        const timer = setTimeout(() => { socket.destroy(); finish(); }, 3000);
+        socket.on('connect', () => {
+            socket.write(`GET /api/session HTTP/1.1\\r\\nHost: 127.0.0.1:${port}\\r\\nConnection: close\\r\\n\\r\\n`);
+        });
+        socket.on('data', chunk => chunks.push(Buffer.from(chunk)));
+        socket.on('close', finish);
+        socket.on('error', finish);
+    });
+    assert.equal(received.toString('latin1').startsWith('HTTP/'), false,
+        'port TLS tidak boleh membalas protokol HTTP plaintext');
 });
 
 test('integrasi: server.js berjalan dan API tanpa sesi ditolak 401 JSON', async () => {
