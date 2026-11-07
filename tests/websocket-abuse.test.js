@@ -193,5 +193,5 @@ test('lifecycle: SIGTERM menghentikan server dengan rapi (tanpa exception)', asy
     assert.notEqual(code, 'timeout', 'server harus berhenti sendiri setelah SIGTERM');
     assert.equal(signal, null, 'proses harus keluar sendiri, bukan dibunuh');
     assert.equal(code, 130, 'kode keluar SIGTERM yang terdokumentasi');
-    assert.ok(!/uncaughtException|Jaring/.test(log), 'tidak boleh ada exception tak tertangani saat shutdown: ' + log.slice(-400));
+    assert.ok(!/uncaughtException|ERR_UNHANDLED_ERROR/.test(log), 'tidak boleh ada exception tak tertangani saat shutdown: ' + log.slice(-400));
 });
