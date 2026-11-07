@@ -16,18 +16,8 @@ lalu menuliskan penyebab + perintah perbaikannya.
 
 ## 1. Yang sudah diverifikasi pada repo ini
 
-Pemeriksaan pada checkout bersih (Node 22.22.3, npm 10.9.8):
-
-| Uji | Hasil |
-| --- | --- |
-| `npm install` | berhasil, 77 paket, tanpa dependency hilang |
-| `node --check server.js` | sintaks valid |
-| `npm start` | server menyala di port 3000, banner tampil, mode setup awal |
-| `npm test` | 248 tes, 247 lulus, 1 di-skip, 0 gagal |
-
-Artinya: **kegagalan `npm start` hampir selalu berasal dari lingkungan**
-(folder salah, `node_modules` belum ada, port bentrok, `.env` tidak
-konsisten, atau versi Node terlalu lama), bukan dari sintaks program.
+Setelah perubahan kode, jalankan `npm test` pada perangkat/lingkungan Node yang
+menjalankan server untuk memverifikasi sintaks dan seluruh tes otomatis.
 
 ## 2. Titik kegagalan saat startup (`server.js`)
 
