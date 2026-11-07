@@ -36,6 +36,24 @@ test('TLS config: missing certificate settings fail closed', () => {
     );
 });
 
+test('TLS config: expired server certificates are rejected', () => {
+    const threeDaysAhead = Date.now() + 3 * 24 * 60 * 60 * 1000;
+    assert.throws(
+        () => loadTlsOptions(testEnv(TEST_TLS.serverEnv), threeDaysAhead),
+        /Sertifikat server belum berlaku atau sudah kedaluwarsa/
+    );
+});
+
+test('TLS config: symbolic-link key paths are rejected', t => {
+    if (process.platform === 'win32') return t.skip('Symlink test memerlukan dukungan symlink POSIX.');
+    const linkedKey = path.join(TEST_TLS.dir, 'server-key-link');
+    fs.symlinkSync(TEST_TLS.keyPath, linkedKey);
+    assert.throws(
+        () => loadTlsOptions(testEnv({ ...TEST_TLS.serverEnv, TLS_KEY_PATH: linkedKey })),
+        /harus berupa file biasa, bukan symlink/
+    );
+});
+
 test('TLS config: a server private key with group/other permissions is rejected', t => {
     if (process.platform === 'win32') return t.skip('Mode POSIX tidak tersedia di Windows.');
     const tooOpen = path.join(TEST_TLS.dir, 'too-open.key');
