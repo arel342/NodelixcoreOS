@@ -202,9 +202,10 @@ function closeSocketsFor(evt) {
 }
 auth.setRevokeHandler(closeSocketsFor);
 
-// WebSocket upgrade dipicu oleh http.Server (yang memarser HTTP dari socket TLS),
-// bukan net.Server deteksi protokol — jadi listener dipasang di httpServer.
-server.httpServer.on('upgrade', (req, socket, head) => {
+// HTTP memakai server langsung; HTTPS memakai http.Server internal yang
+// memarser request dari socket TLS. Pasang upgrade pada penerima HTTP yang benar.
+const upgradeServer = server.httpServer || server;
+upgradeServer.on('upgrade', (req, socket, head) => {
     // Socket mentah setelah upgrade menjadi tanggung jawab kita: tanpa listener 'error',
     // klien yang memutus koneksi di tengah handshake (ECONNRESET/EPIPE) akan melempar
     // exception tak tertangani yang mematikan seluruh server.
