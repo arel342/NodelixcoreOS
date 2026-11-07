@@ -12,7 +12,9 @@ npm run gen-certs
 npm start
 ```
 
-Generator `gen-certs.js` menggunakan API bawaan Node.js (`node:crypto` dan `node:fs`). OpenSSL CLI tidak perlu dipasang atau dipanggil.
+Generator `gen-certs.js` menggunakan API bawaan Node.js (`node:crypto` dan `node:fs`). OpenSSL CLI tidak perlu dipasang atau dipanggil. Node.js tetap menggunakan implementasi TLS kriptografi internalnya sendiri; yang dihilangkan adalah ketergantungan pada program `openssl` eksternal.
+
+Pada instalasi lama, periksa `.env`: pastikan `TLS_ENABLED=true` (atau biarkan default) dan hapus/komentari `TLS_ALLOW_HTTP=true`. Nilai `TLS_ENABLED=false` menonaktifkan HTTPS secara eksplisit.
 
 Alamat yang ditampilkan server memakai `https://`, misalnya:
 
