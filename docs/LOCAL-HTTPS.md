@@ -54,7 +54,7 @@ subjectAltName = @alt_names
 
 [ server_cert ]
 basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature,keyEncipherment
+keyUsage = critical,digitalSignature
 extendedKeyUsage = serverAuth
 subjectAltName = @alt_names
 
@@ -113,7 +113,7 @@ TLS_SERVER_NAMES=nodelixcoreos.local
 TRUST_PROXY=false
 ```
 
-Replace `LOCAL_ALLOWED_CIDRS` with the actual client-side LAN subnet(s), for example `192.168.1.0/24` only if that is truly your LAN. You can list both IPv4 and IPv6 CIDRs separated by commas. The default loopback-only rule intentionally prevents LAN clients from connecting until an administrator configures the proper subnet. Empty allowlists and catch-all networks (`0.0.0.0/0`, `::/0`) are rejected.
+Replace `LOCAL_ALLOWED_CIDRS` with the actual client-side LAN subnet(s), for example `192.168.1.0/24` only if that is truly your LAN. You can list both IPv4 and IPv6 CIDRs separated by commas. The default loopback-only rule intentionally prevents LAN clients from connecting until an administrator configures the proper subnet. Empty allowlists, catch-all networks (`0.0.0.0/0`, `::/0`), and non-local/public subnets are rejected. Only RFC1918 IPv4, IPv4 loopback/link-local, IPv6 ULA, IPv6 link-local, and IPv6 loopback CIDRs are accepted.
 
 Determine the subnet from the server/router configuration (for example, `ip -4 route` on Linux/Termux or `ipconfig` on Windows). Do not assume the server is always assigned the same IP. A stable DNS hostname plus DHCP reservation is preferred.
 
