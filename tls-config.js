@@ -21,22 +21,36 @@ function configuredPath(env, key) {
 }
 
 function readPem(file, label, privateKey) {
-    let stat;
+    let initial;
     try {
-        stat = fs.lstatSync(file);
+        initial = fs.lstatSync(file);
     } catch {
         throw configurationError(label + ' tidak ditemukan: ' + file);
     }
-    if (stat.isSymbolicLink() || !stat.isFile()) {
+    if (initial.isSymbolicLink() || !initial.isFile()) {
         throw configurationError(label + ' harus berupa file biasa, bukan symlink: ' + file);
     }
-    if (privateKey && process.platform !== 'win32' && (stat.mode & 0o077) !== 0) {
-        throw configurationError('Permission ' + label + ' terlalu terbuka; gunakan chmod 600 pada file private key.');
-    }
+
+    let fd;
     try {
-        return fs.readFileSync(file);
-    } catch {
-        throw configurationError(label + ' tidak dapat dibaca: ' + file);
+        const noFollow = fs.constants.O_NOFOLLOW || 0;
+        fd = fs.openSync(file, fs.constants.O_RDONLY | noFollow);
+        const opened = fs.fstatSync(fd);
+        // Detect replacement between lstat() and open(), including symlink swaps.
+        if (!opened.isFile() || opened.dev !== initial.dev || opened.ino !== initial.ino) {
+            throw configurationError(label + ' berubah saat dibuka; gunakan file biasa yang stabil.');
+        }
+        if (privateKey && process.platform !== 'win32' && (opened.mode & 0o077) !== 0) {
+            throw configurationError('Permission ' + label + ' terlalu terbuka; gunakan chmod 600 pada file private key.');
+        }
+        return fs.readFileSync(fd);
+    } catch (error) {
+        if (error && error.code === 'TLS_CONFIG_INVALID') throw error;
+        throw configurationError(label + ' tidak dapat dibaca sebagai file biasa: ' + file);
+    } finally {
+        if (fd !== undefined) {
+            try { fs.closeSync(fd); } catch { }
+        }
     }
 }
 
@@ -96,8 +110,12 @@ function loadTlsOptions(env = (key, fallback) => process.env[key] || fallback, n
 
     const privatePublic = crypto.createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
     const certificatePublic = serverCert.publicKey.export({ type: 'spki', format: 'der' });
+    const rootPublic = rootCert.publicKey.export({ type: 'spki', format: 'der' });
     if (!privatePublic.equals(certificatePublic)) {
         throw configurationError('Private key server tidak cocok dengan sertifikat server.');
+    }
+    if (privatePublic.equals(rootPublic)) {
+        throw configurationError('Private key server harus berbeda dari private key Root CA.');
     }
 
     validateServerNames(serverCert, env('TLS_SERVER_NAMES', ''));
