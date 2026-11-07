@@ -246,7 +246,7 @@ cp .env.example .env
 ```
 
 Server hanya menggunakan **HTTP/WS** dan tidak memerlukan sertifikat. Hapus pengaturan
-`TLS_ENABLED`, `TLS_ALLOW_HTTP`, dan pengaturan sertifikat lama dari `.env` jika masih ada.
+pengaturan sertifikat lama dari `.env` jika masih ada.
 Gunakan HTTP hanya di LAN tepercaya: password dan token tidak dienkripsi.
 
 Jalankan:
