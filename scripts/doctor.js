@@ -53,12 +53,7 @@ function warn(title, detail, fix) {
 // ---------- .env (dibaca sama seperti server.js) ----------
 const ENV_FILE = path.join(ROOT, '.env');
 function readEnvFile(file) {
-    const map = new Map();
-    for (const raw of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-        const m = raw.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-        if (m) map.set(m[1], m[2].replace(/^(['"])(.*)\1$/, '$2'));
-    }
-    return map;
+    return require('../env-file').parse(fs.readFileSync(file, 'utf8'));
 }
 let envMap = new Map();
 function env(key, def = '') {

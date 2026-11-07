@@ -8,26 +8,24 @@ const crypto = require('crypto');
 
 // ================= .env (tanpa dependency tambahan) =================
 const ENV_FILE = path.join(__dirname, '.env');
+const envFile = require('./env-file');
 if (fs.existsSync(ENV_FILE)) {
-    for (const line of fs.readFileSync(ENV_FILE, 'utf8').split(/\r?\n/)) {
-        const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-        if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^(['"])(.*)\1$/, '$2');
+    for (const [key, value] of envFile.parse(fs.readFileSync(ENV_FILE, 'utf8'))) {
+        if (!(key in process.env)) process.env[key] = value;
     }
 }
 const env = (k, d = '') => (process.env[k] === undefined || process.env[k] === '') ? d : process.env[k];
 
 function saveEnv(key, value) {
-    let txt = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf8') : '';
-    const re = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
-    if (re.test(txt)) txt = txt.replace(re, () => `${key}=${value}`);
-    else txt = txt.replace(/\s*$/, '') + (txt.trim() ? '\n' : '') + `${key}=${value}\n`;
-    // Tulis ke berkas sementara lalu rename (atomik), dan batasi hak akses: .env berisi
-    // password admin, token Telegram, serta kunci API Gemini.
-    const tmp = `${ENV_FILE}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, txt, { mode: 0o600 });
-    try { fs.chmodSync(tmp, 0o600); } catch { /* filesystem tanpa izin unix */ }
-    fs.renameSync(tmp, ENV_FILE);
-    process.env[key] = value;   // langsung dipakai proses yang berjalan
+    envFile.save(ENV_FILE, key, value);
+    process.env[key] = String(value);
+}
+
+// Android may deny network interface enumeration (uv_interface_addresses).
+// This must never prevent local setup/login or device service startup.
+function networkInterfaces() {
+    try { return os.networkInterfaces(); }
+    catch { return {}; }
 }
 // Catatan: konfigurasi GEMINI_MODEL milik pengguna TIDAK ditulis ulang otomatis.
 // Model yang tidak tersedia dilaporkan apa adanya (fallback hanya bila dikonfigurasi).
@@ -332,7 +330,7 @@ app.post('/api/login', (req, res) => {
     }
     loginLimiter.reset(req.ip);
     secLog.loginSuccess(req.ip, String(username).slice(0, 32));
-    createSession(res, { secure: false });
+    createSession(res, { secure: !!req.secure });
     res.json({ success: true, message: T('auth.loginOk') });
 });
 
@@ -520,7 +518,7 @@ if (ai && typeof ai.setTelegram === 'function') ai.setTelegram(telegram);
 // ke dashboard (WebSocket {type:'UPDATE'} + /api/update/status). `git pull` tidak pernah
 // dijalankan dari sini: pemasangan update tetap tindakan manual administrator.
 function lanBaseUrl() {
-    const ips = Object.values(os.networkInterfaces()).flat()
+    const ips = Object.values(networkInterfaces()).flat()
         .filter(i => i && i.family === 'IPv4' && !i.internal && !/^169\.254\./.test(i.address))
         .map(i => i.address);
     return `http://${ips[0] || 'localhost'}:${env('PORT', 3000)}`;
@@ -772,7 +770,7 @@ app.use((err, req, res, next) => {
 });
 
 function printBanner() {
-    const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)
+    const ips = Object.values(networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)
         .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
     const list = ips.length ? ips : ['localhost'];
     const port = env('PORT', 3000);
