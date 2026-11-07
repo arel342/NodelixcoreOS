@@ -136,11 +136,32 @@ test('tls: HTTP plaintext ditolak dengan pesan jelas (400 "HTTPS required")', as
     assert.match(resp, /HTTPS wajib digunakan|HTTPS is required/i, 'pesan lokal+Inggris');
 });
 
-test('tls: TLS 1.0 dan TLS 1.1 ditolak (openssl s_client)', () => {
-    for (const ver of ['-tls1', '-tls1_1']) {
-        const o = spawnSync('openssl', ['s_client', '-connect', '127.0.0.1:' + port, ver], { encoding: 'utf8', input: '' });
-        const combined = (o.stderr || '') + (o.stdout || '');
-        assert.match(combined, /alert protocol version|no protocols available|SSL routines/i, ver + ' harus ditolak: ' + combined.slice(0, 120));
+test('tls: TLS 1.0 dan TLS 1.1 ditolak oleh server (klien Node.js)', async () => {
+    for (const version of ['TLSv1', 'TLSv1.1']) {
+        const result = await new Promise(resolve => {
+            let socket;
+            try {
+                socket = tls.connect({
+                    host: '127.0.0.1',
+                    port,
+                    servername: 'localhost',
+                    ca: caPem,
+                    rejectUnauthorized: true,
+                    minVersion: version,
+                    maxVersion: version,
+                    // Rendahkan security level hanya untuk menguji versi protokol lama.
+                    // Server tetap harus menolak sebelum aplikasi menerima HTTP.
+                    ciphers: 'DEFAULT:@SECLEVEL=0',
+                    secureOptions: 0
+                }, () => resolve('CONNECTED (UNEXPECTED): ' + socket.getProtocol()));
+            } catch (e) {
+                resolve('REJECTED: ' + (e.code || e.message));
+                return;
+            }
+            socket.on('error', e => resolve('REJECTED: ' + (e.code || e.message)));
+            setTimeout(() => { try { socket.destroy(); } catch { } resolve('TIMEOUT'); }, 4000);
+        });
+        assert.match(result, /^REJECTED:/, version + ' harus ditolak oleh server: ' + result);
     }
 });
 
@@ -179,7 +200,14 @@ test('tls: sertifikat valid, belum kedaluwarsa, rantai CA benar', () => {
     // Validasi rantai via crypto (cert & ca adalah PEM).
     const cert = new crypto.X509Certificate(loaded.cert);
     const ca = new crypto.X509Certificate(loaded.ca);
-    assert.doesNotThrow(() => cert.checkIssued(ca), 'cert diterbitkan oleh CA');
+    assert.equal(ca.ca, true, 'root CA harus memiliki Basic Constraints CA:TRUE');
+    assert.equal(ca.checkIssued(ca), true, 'root CA harus self-issued');
+    assert.equal(ca.verify(ca.publicKey), true, 'tanda tangan root CA harus valid');
+    assert.equal(cert.checkIssued(ca), true, 'issuer sertifikat server harus cocok dengan CA');
+    assert.equal(cert.verify(ca.publicKey), true, 'tanda tangan sertifikat server harus diverifikasi dengan public key CA');
+    assert.equal(cert.checkPrivateKey(crypto.createPrivateKey(loaded.key)), true, 'private key harus cocok dengan sertifikat');
+    assert.ok(cert.checkHost('localhost'), 'SAN localhost harus cocok');
+    assert.ok(cert.checkIP('127.0.0.1'), 'SAN IP loopback harus cocok');
 });
 
 test('tls: WSS melayani (WebSocket over TLS)', async () => {
@@ -207,6 +235,14 @@ test('tls: berkas sertifikat/kunci tidak masuk git (gitignore aktif)', () => {
     // Verifikasi cert/key tidak tercommit di HEAD.
     const ls = spawnSync('git', ['ls-files', 'data/ca/', 'data/certs/'], { cwd: ROOT, encoding: 'utf8' });
     assert.equal(ls.stdout.trim(), '', 'tidak boleh ada berkas CA/cert di git: ' + ls.stdout);
+});
+
+
+test('tls: generator sertifikat tidak memanggil OpenSSL CLI', () => {
+    const source = fs.readFileSync(path.join(ROOT, 'gen-certs.js'), 'utf8');
+    assert.doesNotMatch(source, /child_process|spawnSync|execFileSync|openssl\s+(genrsa|req|x509|s_client)/i);
+    assert.match(source, /generateKeyPairSync/);
+    assert.match(source, /crypto\.sign/);
 });
 
 test('tls: cert memiliki SAN untuk localhost + IP loopback', () => {
