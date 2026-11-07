@@ -249,11 +249,12 @@ module.exports = function createMobileAuth({
         // Untuk TLS offload gunakan MOBILE_AUTH_SERVER_ORIGIN secara eksplisit.
         const host = String((req.headers && req.headers.host) || '').split(',')[0].trim();
         if (host) {
+            // Ikat tanda tangan pada skema transport yang benar-benar dipakai.
+            // Server produksi hanya menyediakan HTTPS; jangan menerima payload HTTP
+            // seolah-olah berasal dari origin HTTPS yang dipercaya.
             const proto = req.socket && req.socket.encrypted ? 'https' : 'http';
-            for (const p of new Set([proto, 'http', 'https'])) {
-                const n = normOrigin(`${p}://${host}`);
-                if (n) out.add(n);
-            }
+            const n = normOrigin(`${proto}://${host}`);
+            if (n) out.add(n);
         }
         return [...out];
     }
