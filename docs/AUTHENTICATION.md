@@ -146,7 +146,7 @@ POST /api/mobile/auth/verify
   "challengeId": "chl_...",
   "timestamp": 1762041612345,
   "signatureBase64": "<DER Base64>",
-  "serverOrigin": "https://192.168.1.10:3000"   // opsional
+  "serverOrigin": "http://192.168.1.10:3000"   // opsional
 }
 ```
 
@@ -201,14 +201,13 @@ saat `verify`, sehingga server menyusun kandidat dari:
 
 1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — **disarankan** jika
    server menggunakan origin HTTP lokal,
-2. `Host` + skema transport yang benar-benar diterima server (`https` untuk HTTPS,
-   `http` untuk mode default HTTP di LAN tepercaya),
+2. `Host` + skema HTTP yang diterima server (`http`),
 3. `serverOrigin` yang dikirim klien pada body `verify` (bila ada).
 
 Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat. Nonce tetap
 sekali pakai, sehingga memperluas daftar origin tidak membuka replay.
 
-Contoh reverse proxy (Caddy/Nginx) yang meneruskan header:
+Contoh konfigurasi proxy (bila dipakai) yang meneruskan header:
 
 ```nginx
 proxy_set_header Host $host:$server_port;
