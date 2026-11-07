@@ -807,6 +807,32 @@ npm start
 `.env` dan data pengguna (`data/`, flash disk) tidak ditimpa oleh update. Server tidak
 menjalankan `git reset --hard` atau menghapus perubahan lokal.
 
+## `npm start` gagal? Jalankan `npm run doctor`
+
+Sebelum menebak penyebabnya, periksa lingkungan dengan satu perintah:
+
+```bash
+npm run doctor
+```
+
+Skrip ini membaca Node/npm, `node_modules`, `.env`, konfigurasi TLS, port web, dan
+folder `data` — lalu mencetak penyebab beserta perintah perbaikannya. Ia tidak
+menyalakan server dan tidak mengubah berkas.
+
+Penyebab paling sering:
+
+| Pesan | Perbaikan cepat |
+| --- | --- |
+| `Missing script: "start"` | jalankan dari folder project: `cd ~/NodelixcoreOS` |
+| `Cannot find module 'express'` | `npm install` |
+| `listen EADDRINUSE ... :3000` | server lama masih hidup: `pkill -f "node server.js"`, atau `PORT=3001` di `.env` |
+| `[TLS] Gagal memuat sertifikat` | `npm run gen-certs`, atau set `TLS_ENABLED=false` + `TLS_ALLOW_HTTP=true` |
+| `[Security] Validasi konfigurasi gagal` | ikuti alasan yang dicetak (mis. `ADMIN_PASSWORD` < 8 karakter) |
+| `SyntaxError` | Node < 18.17: perbarui Node, lalu `npm install` ulang |
+
+Tabel lengkap gejala → penyebab → perbaikan ada di
+[`docs/TROUBLESHOOTING-NPM-START.md`](docs/TROUBLESHOOTING-NPM-START.md).
+
 ## Keamanan
 
 Project sebaiknya digunakan pada jaringan yang dikontrol oleh pemilik.
