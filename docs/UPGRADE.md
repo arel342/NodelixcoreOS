@@ -33,11 +33,12 @@ termux-setup-storage          # bila memakai flash disk
 git clone https://github.com/arel342/NodelixcoreOS
 cd NodelixcoreOS
 npm install
+npm run gen-certs        # membuat CA lokal + sertifikat HTTPS (tanpa OpenSSL CLI)
 npm start
 ```
 
-Buka `http://<IP-HP>:3000/setup.html` di browser (satu WiFi), ikuti wizard, lalu
-dashboard dapat dipakai. Node.js minimal **18.17** (lihat `engines` di `package.json`).
+Buka `https://<IP-HP>:3000/setup.html` di browser (satu WiFi). Percayai CA lokal dari `data/ca/root-ca.crt` di perangkat/browser terlebih dahulu, lalu ikuti wizard.
+Dashboard kemudian dapat dipakai. Simpan CA root dengan aman; jangan bagikan `data/ca/root-ca.key`. Node.js minimal **18.17** (lihat `engines` di `package.json`).
 
 Tanpa `.env`, server tetap berjalan pada mode setup: semua API ditutup sampai akun
 admin dibuat.
