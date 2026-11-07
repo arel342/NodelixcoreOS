@@ -12,9 +12,8 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
-const https = require('https');
+const http = require('http');
 const net = require('node:net');
-const tls = require('node:tls');
 const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
@@ -25,13 +24,6 @@ const ADMIN = { username: 'admin', password: 'ws-abuse-test-123' };
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'nodelix-ws-'));
 const storageDir = path.join(tmpRoot, 'storage');
 fs.mkdirSync(path.join(storageDir, 'upload'), { recursive: true });
-
-// Hasilkan CA + sertifikat server di temp dir sebelum server di-spawn.
-const { ensureCertificates } = require(path.join(ROOT, 'gen-certs'));
-const certResult = ensureCertificates({ dataDir: tmpRoot, quiet: true });
-const caPem = fs.readFileSync(certResult.caCertFile);
-const agent = new https.Agent({ ca: caPem, rejectUnauthorized: true });
-const wsOpts = { ca: caPem, rejectUnauthorized: true };
 
 // Data runtime milik server (data/mobile-*.json) disimpan & dipulihkan agar tes tidak
 // mengubah data pengguna yang sudah ada.
@@ -51,7 +43,6 @@ function startServer(prt) {
             env: {
                 ...process.env,
                 PORT: String(prt),
-                TLS_DATA_DIR: tmpRoot, TLS_ENABLED: 'true',
                 ADMIN_USERNAME: ADMIN.username,
                 ADMIN_PASSWORD: ADMIN.password,
                 SESSION_TTL_HOURS: '1',
@@ -89,11 +80,11 @@ async function freePort() {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Permintaan HTTPS sederhana (untuk login /api/session).
+// Permintaan HTTP lokal sederhana (untuk login /api/session).
 async function httpReq(method, url, { headers = {}, body } = {}) {
-    const u = new URL('https://127.0.0.1:' + port + url);
+    const u = new URL('http://127.0.0.1:' + port + url);
     return new Promise((resolve, reject) => {
-        const rq = https.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method, headers, agent }, res => {
+        const rq = http.request({ hostname: u.hostname, port: u.port, path: u.pathname + u.search, method, headers }, res => {
             let text = ''; res.setEncoding('utf8'); res.on('data', d => text += d);
             res.on('end', () => { let json = null; try { json = JSON.parse(text); } catch { } resolve({ status: res.statusCode, json, text, headers: res.headers }); });
         });
@@ -103,11 +94,11 @@ async function httpReq(method, url, { headers = {}, body } = {}) {
     });
 }
 
-// Kirim frame mentah (tidak sah) ke endpoint WebSocket (WSS), lalu tutup socket
+// Kirim frame mentah (tidak sah) ke endpoint WebSocket (WS), lalu tutup socket
 // tanpa handshake close yang benar.
 function sendBadFrame(payload) {
     return new Promise(resolve => {
-        const c = tls.connect({ host: '127.0.0.1', port, ca: caPem, servername: '127.0.0.1', rejectUnauthorized: true }, () => {
+        const c = net.connect({ host: '127.0.0.1', port }, () => {
             c.write(
                 `GET / HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n` +
                 `Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nCookie: ${cookie}\r\n\r\n`
@@ -149,7 +140,7 @@ after(() => {
 });
 
 test('WebSocket: dashboard menerima snapshot awal (SENSOR, DOOR, UPDATE, DEVICE_COUNT)', async () => {
-    const ws = new WebSocket(`wss://127.0.0.1:${port}/`, { ...wsOpts, headers: { Cookie: cookie } });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`, { headers: { Cookie: cookie } });
     const types = [];
     await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('tidak ada snapshot awal: ' + types.join(','))), 8000);
@@ -179,14 +170,14 @@ test('WebSocket: frame tidak sah tidak mematikan server', async () => {
     const added = log.slice(before);
     assert.ok(!/uncaughtException|ERR_UNHANDLED_ERROR/.test(added), 'tidak boleh ada exception tak tertangani: ' + added.slice(0, 300));
 
-    // HTTPS masih dilayani setelah percobaan di atas.
+    // HTTP masih dilayani setelah percobaan di atas.
     const r = await httpReq('GET', '/api/session', { headers: { Cookie: cookie } });
     assert.equal(r.status, 200);
     assert.equal(r.json.authenticated, true);
 });
 
 test('WebSocket: koneksi baru tetap bisa login setelah frame rusak', async () => {
-    const ws = new WebSocket(`wss://127.0.0.1:${port}/`, { ...wsOpts, headers: { Cookie: cookie } });
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/`, { headers: { Cookie: cookie } });
     const got = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error('tidak ada pesan')), 8000);
         ws.on('message', raw => {
