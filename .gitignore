@@ -68,6 +68,13 @@ data/mobile-sessions.json.*.tmp
 data/mobile-devices.json
 data/mobile-devices.json.*.tmp
 
+# Legacy local certificate artifacts — kept ignored to prevent accidental key exposure.
+data/ca/
+data/certs/
+*.pem
+*.key
+*.srl
+
 # Runtime state (riwayat AI, jadwal, audit, riwayat sensor)
 data/ai-history.json
 data/schedules.json
