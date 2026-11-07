@@ -75,7 +75,7 @@ function wzRender() {
 function wzSummary() {
     const el = $('summary');
     if (!el || !WZ.s) return;
-    const s = WZ.s, dash = (s.server.ips && s.server.ips[0] ? `http://${s.server.ips[0]}:${s.server.port}` : '');
+    const s = WZ.s, dash = window.location.origin;
     const key = v => v ? v : t('wz.notFilled');
     const row = (k, v) => `<div class="kv"><span>${k}</span><b>${esc(v)}</b></div>`;
     el.innerHTML =
@@ -123,8 +123,8 @@ async function wzLoad() {
     // Isi nilai yang sudah ada (kalau setup dijalankan ulang dari Pengaturan)
     if (s.account.username) $('in-user').value = s.account.username;
     $('in-port').value = s.server.port;
-    $('addr-list').innerHTML = (s.server.ips || []).map(ip =>
-        `<span>http://${esc(ip)}:${esc(String(s.server.port))}</span><button type="button" onclick="wzCopyText('http://${esc(ip)}:${esc(String(s.server.port))}')">${esc(t('wz.copy'))}</button>`).join('');
+    $('addr-list').innerHTML =
+        `<span>${esc(window.location.origin)}</span><button type="button" onclick="wzCopyText('${esc(window.location.origin)}')">${esc(t('wz.copy'))}</button>`;
     $('in-e32-ip').value = s.esp32.ip || '';
     $('in-e32-port').value = s.esp32.port || 80;
     // Server tidak mengirim kunci tersimpan ke pengunjung yang belum login (lihat
