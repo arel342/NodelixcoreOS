@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const https = require('node:https');
+const crypto = require('node:crypto');
 
 let cached;
 
@@ -85,12 +86,50 @@ function ensureLocalTls() {
     }
 }
 
-function httpsFetch(input, options = {}) {
+async function httpsFetch(input, options = {}) {
     const tlsConfig = ensureLocalTls();
     const url = new URL(input);
     if (url.protocol !== 'https:') throw new Error('Test helper hanya mengizinkan HTTPS.');
-    const body = options.body == null ? null : options.body;
-    const headers = { ...(options.headers || {}) };
+    let body = options.body == null ? null : options.body;
+    const headers = Object.fromEntries(new Headers(options.headers || {}).entries());
+
+    // Node's https.request accepts byte/string payloads, not the Fetch FormData
+    // object. Encode multipart deterministically so real upload endpoints remain
+    // covered by the HTTPS integration suite.
+    if (typeof FormData !== 'undefined' && body instanceof FormData) {
+        const boundary = '----NodelixTest' + crypto.randomBytes(16).toString('hex');
+        const chunks = [];
+        const safe = value => String(value).replace(/[\r\n"]/g, '_');
+        for (const [name, value] of body.entries()) {
+            if (typeof value === 'string') {
+                chunks.push(Buffer.from(
+                    '--' + boundary + '\\r\\n' +
+                    'Content-Disposition: form-data; name="' + safe(name) + '"\\r\\n\\r\\n' +
+                    value + '\\r\\n',
+                    'utf8'
+                ));
+            } else {
+                const filename = safe(value && value.name ? value.name : 'blob');
+                const mime = value && value.type ? value.type : 'application/octet-stream';
+                chunks.push(Buffer.from(
+                    '--' + boundary + '\\r\\n' +
+                    'Content-Disposition: form-data; name="' + safe(name) + '"; filename="' + filename + '"\\r\\n' +
+                    'Content-Type: ' + mime + '\\r\\n\\r\\n',
+                    'utf8'
+                ));
+                chunks.push(Buffer.from(await value.arrayBuffer()));
+                chunks.push(Buffer.from('\\r\\n'));
+            }
+        }
+        chunks.push(Buffer.from('--' + boundary + '--\\r\\n', 'utf8'));
+        body = Buffer.concat(chunks);
+        headers['content-type'] = 'multipart/form-data; boundary=' + boundary;
+    } else if (body instanceof URLSearchParams) {
+        body = body.toString();
+        headers['content-type'] = headers['content-type'] || 'application/x-www-form-urlencoded;charset=UTF-8';
+    } else if (body != null && typeof body !== 'string' && !Buffer.isBuffer(body) && !(body instanceof Uint8Array)) {
+        throw new TypeError('Body HTTPS test harus berupa string, bytes, URLSearchParams, atau FormData.');
+    }
 
     return new Promise((resolve, reject) => {
         const request = https.request({
