@@ -674,7 +674,7 @@ Cara kerjanya:
    request baru ke GitHub — dan langsung menampilkan notifikasinya.
 
 Notifikasi Telegram berisi commit terpasang, commit terbaru, pesan commit, tautan
-repositori, tautan dashboard (`https://<IP-LAN>:<port>/#update`), dan waktu deteksi.
+repositori, tautan dashboard (`http://<IP-LAN>:<port>/#update`), dan waktu deteksi.
 Satu notifikasi dikirim per commit; commit yang sama tidak dikirim ulang walau server
 dimulai ulang. Kalau Telegram sedang tidak bisa dihubungi, notifikasi disimpan sebagai
 *tertunda* dan dicoba ulang otomatis. Kalau GitHub tidak tersedia atau membatasi permintaan
@@ -802,7 +802,6 @@ Project sebaiknya digunakan pada jaringan yang dikontrol oleh pemilik.
 Untuk deployment ke internet, pertimbangkan:
 
 * Batasi akses server ke jaringan lokal tepercaya
-* Firewall
 * Firewall
 * Authentication yang lebih kuat
 * Rate limiting
