@@ -1,10 +1,9 @@
 # WebSocket — Autentikasi dan Event
 
-Server memakai `ws` dengan `noServer: true`; koneksi hanya diterima setelah
-**HTTP Upgrade** lolos autentikasi.
+Server memakai `ws` dengan `noServer: true` pada listener TLS yang sama dengan REST API. Handshake WSS hanya diterima setelah alamat sumber lolos allowlist CIDR, Origin browser valid, dan autentikasi sesi lolos sebelum **HTTP Upgrade**.
 
-- URL: `ws://<host>:<port>/` (atau `wss://` di balik reverse proxy TLS)
-- Tidak ada token di query string. `ws://host/?token=...` **tidak didukung**.
+- URL produksi: `wss://<hostname-LAN>:<port>/` (sertifikat harus dipercaya dan hostname harus cocok)
+- Tidak ada token di query string. `wss://host/?token=...` **tidak didukung**.
 - Path apa pun diterima setelah autentikasi berhasil (dashboard memakai `/`).
 
 ---
@@ -39,7 +38,7 @@ Content-Type: application/json
 ```
 
 Aplikasi Android (OkHttp) dapat menambahkan header pada `Request.Builder` sebelum
-`newWebSocket(...)`; tidak perlu trik query string.
+`newWebSocket(...)`; tidak perlu trik query string. TLS trust anchor CA lokal harus dikonfigurasi eksplisit, dan hostname verification tidak boleh dinonaktifkan.
 
 ---
 
@@ -48,7 +47,7 @@ Aplikasi Android (OkHttp) dapat menambahkan header pada `Request.Builder` sebelu
 1. Saat upgrade, identitas sesi (`kind`, `sid` atau `tokenHash`/`deviceId`) disimpan
    pada koneksi.
 2. Setiap 30 detik server memeriksa ulang: apakah sesi masih ada, belum kedaluwarsa,
-   dan perangkat masih `ACTIVE`.
+   dan perangkat masih `ACTIVE`; heartbeat ping/pong memutus koneksi yang tidak merespons.
 3. Pencabutan (`logout`, `refresh`, hapus perangkat, ganti password yang memutus sesi
    web) langsung menutup koneksi yang terkait.
 
@@ -103,6 +102,8 @@ Contoh frame:
 - Token tidak pernah disiarkan, tidak masuk log, dan tidak dikirim ke klien lain.
 - Semua klien yang terhubung adalah sesi admin (dashboard) atau perangkat terdaftar;
   tidak ada kanal "publik".
+- Koneksi hanya melalui WSS pada listener TLS yang sama dengan REST API, dan alamat sumber dibatasi oleh `LOCAL_ALLOWED_CIDRS`.
+- Origin browser harus HTTPS same-origin (atau origin HTTPS eksplisit pada `TRUSTED_ORIGINS`); klien native boleh tanpa Origin.
 - Koneksi diputus saat sesi dicabut/kedaluwarsa — bukan hanya saat klien memutuskan.
 
 ---
