@@ -3,8 +3,8 @@
 Server memakai `ws` dengan `noServer: true`; koneksi hanya diterima setelah
 **HTTP Upgrade** lolos autentikasi.
 
-- URL: `ws://<host>:<port>/` (atau `wss://` di balik reverse proxy TLS)
-- Tidak ada token di query string. `ws://host/?token=...` **tidak didukung**.
+- URL: `wss://<host>:<port>/` (server lokal mengaktifkan TLS langsung; `ws://` hanya untuk rollback HTTP eksplisit)
+- Tidak ada token di query string. `wss://host/?token=...` **tidak didukung**.
 - Path apa pun diterima setelah autentikasi berhasil (dashboard memakai `/`).
 
 ---
@@ -21,6 +21,7 @@ Keduanya boleh dikirim bersamaan (Bearer diutamakan).
 ```http
 GET / HTTP/1.1
 Host: 192.168.1.10:3000
+
 Upgrade: websocket
 Connection: Upgrade
 Sec-WebSocket-Key: ...

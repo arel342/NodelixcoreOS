@@ -127,7 +127,7 @@ NODELIXCOREOS-AUTH-V1|<deviceId>|<challengeId>|<nonceBase64>|<timestampMillis>|<
 - `deviceId`, `challengeId`, `nonce` di-trim.
 - `timestampMillis` = waktu perangkat (epoch ms).
 - `origin` = `scheme://host:port` server seperti yang diketik di aplikasi, huruf kecil,
-  tanpa garis miring di akhir (mis. `http://192.168.1.10:3000`).
+  tanpa garis miring di akhir (mis. `https://192.168.1.10:3000`).
 
 Contoh Node.js (untuk pengujian/manual):
 
@@ -146,7 +146,7 @@ POST /api/mobile/auth/verify
   "challengeId": "chl_...",
   "timestamp": 1762041612345,
   "signatureBase64": "<DER Base64>",
-  "serverOrigin": "http://192.168.1.10:3000"   // opsional
+  "serverOrigin": "https://192.168.1.10:3000"   // opsional
 }
 ```
 
@@ -201,8 +201,8 @@ saat `verify`, sehingga server menyusun kandidat dari:
 
 1. `MOBILE_AUTH_SERVER_ORIGIN` (bila diisi, daftar dipisah koma) — **disarankan** jika
    server berada di balik reverse proxy TLS,
-2. `X-Forwarded-Host` / `Host` + `X-Forwarded-Proto`, dalam varian `https://` dan
-   `http://` untuk host yang sama,
+2. `Host` + skema transport yang benar-benar diterima server (`https` untuk HTTPS,
+   `http` hanya bila rollback HTTP eksplisit diaktifkan),
 3. `serverOrigin` yang dikirim klien pada body `verify` (bila ada).
 
 Tanda tangan dianggap sah bila cocok dengan **salah satu** kandidat. Nonce tetap
