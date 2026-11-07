@@ -626,7 +626,8 @@ test('websocket: sesi dicabut -> koneksi diputus (4403)', async () => {
 // ---------- Integrasi server.js ----------
 test('server.js: upgrade WebSocket memakai auth.resolve dan menyimpan identitas sesi', () => {
     const src = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
-    assert.match(src, /server(?:\.httpServer)?\.on\('upgrade'[\s\S]{0,400}auth\.resolve\(req\)/);
+    assert.match(src, /const upgradeServer = server\.httpServer \|\| server;/);
+    assert.match(src, /upgradeServer\.on\('upgrade'[\s\S]{0,400}auth\.resolve\(req\)/);
     assert.match(src, /ws\.auth = r/);
     assert.match(src, /auth\.revalidate\(ws\.auth\)/);
     assert.match(src, /require\('\.\/mobile-auth'\)/);
