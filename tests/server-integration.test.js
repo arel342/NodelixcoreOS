@@ -179,7 +179,7 @@ test('transport: HTTP plaintext tidak dilayani pada port HTTPS', async () => {
         };
         const timer = setTimeout(() => { socket.destroy(); finish(); }, 3000);
         socket.on('connect', () => {
-            socket.write(`GET /api/session HTTP/1.1\\r\\nHost: 127.0.0.1:${port}\\r\\nConnection: close\\r\\n\\r\\n`);
+            socket.write(`GET /api/session HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`);
         });
         socket.on('data', chunk => chunks.push(Buffer.from(chunk)));
         socket.on('close', finish);
