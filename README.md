@@ -801,24 +801,14 @@ menjalankan `git reset --hard` atau menghapus perubahan lokal.
 
 ## Keamanan
 
-Project sebaiknya digunakan pada jaringan yang dikontrol oleh pemilik.
+Project ini ditujukan untuk jaringan lokal. Server hanya menerima HTTPS/WSS, memvalidasi sertifikat TLS saat startup, dan membatasi sumber koneksi melalui `LOCAL_ALLOWED_CIDRS`. Jangan membuka port server ke internet, jangan menggunakan router port forwarding/DMZ/UPnP untuk layanan ini, dan pasang firewall host sesuai subnet LAN yang benar.
 
-Untuk deployment ke internet, pertimbangkan:
+Untuk memperkecil risiko operasional:
 
-* HTTPS
-* Reverse proxy
-* Firewall
-* Authentication yang lebih kuat
-* Rate limiting
-* Session security
-* Validasi upload
-* Pembatasan ukuran file
-* Pembatasan akses storage
-* Rotasi API key
-* Secret management
-* Jangan menganggap prompt AI sebagai pengaman: izin sensitif ditegakkan backend
-  (konfirmasi + validasi schema + audit), bukan oleh kata-kata di prompt.
 * Aktifkan `TERMINAL_ENABLED=false` bila terminal/AI shell tidak diperlukan.
+* Gunakan firewall host dengan allowlist subnet, validasi upload, pembatasan ukuran file, dan permission minimum pada storage.
+* Rotasi API key dan lindungi `.env`, database, backup, serta log.
+* Jangan menganggap prompt AI sebagai pengaman: izin sensitif ditegakkan backend (konfirmasi + validasi schema + audit), bukan oleh kata-kata di prompt.
 * Periksa `data/audit.log` bila mencurigai tindakan yang tidak diinginkan.
 * Tindakan otomatis (jadwal/otomasi) sengaja dibatasi pada operasi non-sensitif.
 
