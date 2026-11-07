@@ -103,25 +103,25 @@ async function httpsFetch(input, options = {}) {
         for (const [name, value] of body.entries()) {
             if (typeof value === 'string') {
                 chunks.push(Buffer.from(
-                    '--' + boundary + '\\r\\n' +
-                    'Content-Disposition: form-data; name="' + safe(name) + '"\\r\\n\\r\\n' +
-                    value + '\\r\\n',
+                    '--' + boundary + '\r\n' +
+                    'Content-Disposition: form-data; name="' + safe(name) + '"\r\n\r\n' +
+                    value + '\r\n',
                     'utf8'
                 ));
             } else {
                 const filename = safe(value && value.name ? value.name : 'blob');
                 const mime = value && value.type ? value.type : 'application/octet-stream';
                 chunks.push(Buffer.from(
-                    '--' + boundary + '\\r\\n' +
-                    'Content-Disposition: form-data; name="' + safe(name) + '"; filename="' + filename + '"\\r\\n' +
-                    'Content-Type: ' + mime + '\\r\\n\\r\\n',
+                    '--' + boundary + '\r\n' +
+                    'Content-Disposition: form-data; name="' + safe(name) + '"; filename="' + filename + '"\r\n' +
+                    'Content-Type: ' + mime + '\r\n\r\n',
                     'utf8'
                 ));
                 chunks.push(Buffer.from(await value.arrayBuffer()));
-                chunks.push(Buffer.from('\\r\\n'));
+                chunks.push(Buffer.from('\r\n'));
             }
         }
-        chunks.push(Buffer.from('--' + boundary + '--\\r\\n', 'utf8'));
+        chunks.push(Buffer.from('--' + boundary + '--\r\n', 'utf8'));
         body = Buffer.concat(chunks);
         headers['content-type'] = 'multipart/form-data; boundary=' + boundary;
     } else if (body instanceof URLSearchParams) {
