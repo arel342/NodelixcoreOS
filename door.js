@@ -31,15 +31,15 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     let raw = null, online = false, everOnline = false, fails = 0, lastOk = 0, boot = null, cursor = 0;
     let gen = 0;                           // penanda rantai polling aktif (start/stop)
     let lastError = '', lastErrorAt = 0;   // error terakhir untuk diagnose_device
-    let syncing = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
+    let syncing = false, recoveringCards = false, lastSync = 0, enrollUntil = 0, enrollStart = 0, pendingCardName = '', pendingTelegramEnroll = false, timer = null;
     const lastMsg = {};
     const base = () => `http://${E('DOOR_IP', '')}:${N('DOOR_PORT', 80)}`;
     const target = () => base();
     let lastTarget = '';
     const configured = () => !!E('DOOR_IP', '');
 
-    async function call(p, method = 'GET', body) {
-        const h = { 'X-API-Key': E('DOOR_API_KEY', '') };
+    async function call(p, method = 'GET', body, extraHeaders = {}) {
+        const h = { 'X-API-Key': E('DOOR_API_KEY', ''), ...extraHeaders };
         if (body !== undefined) h['Content-Type'] = 'text/plain';
         const r = await fetch(base() + p, { method, headers: h, body, signal: AbortSignal.timeout(2500) });
         if (!r.ok) throw new Error('HTTP ' + r.status);
@@ -76,14 +76,15 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
     const nameOf = uid => (db.cards.find(c => c.uid === uid) || {}).name || uid;
 
     // Kirim konfigurasi + daftar UID ke ESP8266 (dipicu bila versi di ESP berbeda dengan server)
-    async function sync() {
+    async function sync(allowEmptyCards = false) {
         if (syncing || !online) return false;
         syncing = true; lastSync = Date.now();
         let ok = false;
         const version = db.ver;
         try {
             const body = [`V=${version}`, `S=${db.openSec}`, `E=${db.enabled ? 1 : 0}`, ...db.cards.map(c => `${c.admin === true ? 'A' : 'C'}=${c.uid}`)].join('\n') + '\n';
-            const j = await call('/api/sync', 'POST', body);
+            const headers = allowEmptyCards ? { 'X-Confirm-Empty-Cards': 'yes' } : {};
+            const j = await call('/api/sync', 'POST', body, headers);
             if (j.ver !== version) throw new Error('Versi konfigurasi tidak cocok');
             if (raw) raw.ver = j.ver;
             ok = db.ver === version;
@@ -92,7 +93,39 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         } finally { syncing = false; push(); }
         return ok;
     }
-    const bump = () => { db.ver++; save(); return sync(); };
+    const bump = (allowEmptyCards = false) => { db.ver++; save(); return sync(allowEmptyCards); };
+
+    // Restore persistent cards from the ESP before a fresh/empty server can overwrite them.
+    async function recoverCardsFromDevice(expectedCount) {
+        if (recoveringCards || !online || !(expectedCount > 0) || db.cards.length > 0) return false;
+        recoveringCards = true;
+        try {
+            const device = await call('/api/cards');
+            if (!device || device.ok !== true || !Array.isArray(device.cards) ||
+                device.cards.length !== expectedCount || device.cards.length > 150 ||
+                !Number.isFinite(Number(device.ver))) throw new Error('Invalid ESP8266 card data');
+            const seen = new Set();
+            const restored = device.cards.map(card => {
+                const uid = String(card && card.uid || '').toUpperCase();
+                if (!/^[0-9A-F]{8,20}$/.test(uid) || seen.has(uid)) throw new Error('Invalid or duplicate card UID');
+                seen.add(uid);
+                return { uid, name: uid, admin: card.admin === true, added: null, last: null };
+            });
+            if (db.cards.length !== 0) throw new Error('Server card database changed during recovery');
+            db.cards = restored;
+            db.ver = Number(device.ver);
+            if (Number.isInteger(Number(device.openSec)) && Number(device.openSec) >= 0 && Number(device.openSec) <= 10) db.openSec = Number(device.openSec);
+            if (typeof device.enabled === 'boolean') db.enabled = device.enabled;
+            save();
+            console.log(`[Pintu] Restored ${restored.length} cards from ESP8266; card names need review.`);
+            push();
+            return true;
+        } catch (e) {
+            console.error('[Pintu] ESP8266 card recovery failed:', e.message);
+            return false;
+        } finally { recoveringCards = false; }
+    }
+
 
     function handle(e) {
         const uid = normUid(e.uid);
@@ -159,7 +192,10 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
             if (e.id > cursor) { cursor = e.id; handle({ ...e, uid: e.uid }); }
         }
         if (enrollUntil && j.enroll === 0 && Date.now() - enrollStart > 2500) enrollUntil = 0;   // ESP sudah keluar dari mode tambah kartu
-        if (j.ver !== db.ver && Date.now() - lastSync > 2000) sync();
+        if (j.ver !== db.ver && Date.now() - lastSync > 2000) {
+            if (db.cards.length === 0 && Number(j.cards) > 0) recoverCardsFromDevice(Number(j.cards));
+            else sync();
+        }
         push();
     }
 
@@ -315,7 +351,7 @@ module.exports = ({ app, broadcast, notify, verifyDashboardPassword }) => {
         // Kartu dihapus dari server, tetapi ESP8266 baru benar-benar lupa kartu itu setelah
         // sinkronisasi berhasil. `synced` memberi tahu dashboard/aplikasi apakah perintah
         // sudah diterima perangkat (sebelumnya hasil sinkronisasi tidak dilaporkan sama sekali).
-        const synced = await bump();
+        const synced = await bump(db.cards.length === 0);
         push();
         res.json({ success: true, synced, message: T(synced ? 'door.cardDeleted' : 'door.cardDeletedPending') });
     });
