@@ -676,8 +676,7 @@ void setup() {
   bootId = ESP.getCycleCount() ^ ESP.getChipId(); if (!bootId) bootId = 1;
   MDNS.begin("pintu-esp8266");
 
-  const char* headerKeys[] = { "X-API-Key", "X-Confirm-Empty-Cards" };
-  server.collectHeaders(headerKeys, 2);
+  server.collectHeaders("X-API-Key", "X-Confirm-Empty-Cards");
   server.on("/", HTTP_GET, hPage);
   server.on("/api/info", HTTP_GET, hInfo);
   server.on("/api/scan", HTTP_GET, hScan);
