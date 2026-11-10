@@ -392,9 +392,36 @@ void hOta() {
   server.send(500, "application/json", "{\"ok\":false,\"error\":\"" + e + "\"}");
 }
 
+void hCards() {
+  if (!auth()) return;
+  String j; j.reserve(4200);
+  j = String("{\"ok\":true,\"ver\":") + cfgVer + ",\"openSec\":" + openSec + ",\"enabled\":" + (enabled ? "true" : "false") + ",\"cards\":[";
+  for (int i = 0; i < nCards; i++) {
+    if (i) j += ',';
+    j += String("{\"uid\":\"") + cards[i] + "\",\"admin\":" + (adminCards[i] ? "true" : "false") + "}";
+  }
+  j += "]}";
+  server.send(200, "application/json", j);
+}
+
 void hSync() {
   if (!auth()) return;
-  if (!parseCfg(server.arg("plain"))) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"format\"}"); return; }
+  String body = server.arg("plain");
+  int cardCount = 0, pos = 0;
+  while (pos < (int)body.length()) {
+    int lineEnd = body.indexOf('\n', pos); if (lineEnd < 0) lineEnd = body.length();
+    String line = body.substring(pos, lineEnd); line.trim(); pos = lineEnd + 1;
+    if (line.startsWith("C=") || line.startsWith("A=")) {
+      String uid = line.substring(2); uid.trim(); uid.toUpperCase();
+      if (uid.length() < 8 || uid.length() > 20) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_uid\"}"); return; }
+      for (unsigned k = 0; k < uid.length(); k++) if (!isxdigit(uid[k])) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_uid\"}"); return; }
+      if (++cardCount > MAX_CARDS) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"too_many_cards\"}"); return; }
+    }
+  }
+  if (cardCount == 0 && nCards > 0 && server.header("X-Confirm-Empty-Cards") != "yes") {
+    server.send(409, "application/json", "{\"ok\":false,\"error\":\"empty_sync_rejected\"}"); return;
+  }
+  if (!parseCfg(body)) { server.send(400, "application/json", "{\"ok\":false,\"error\":\"format\"}"); return; }
   saveCfg();
   server.send(200, "application/json", String("{\"ok\":true,\"ver\":") + cfgVer + "}");
 }
@@ -649,13 +676,15 @@ void setup() {
   bootId = ESP.getCycleCount() ^ ESP.getChipId(); if (!bootId) bootId = 1;
   MDNS.begin("pintu-esp8266");
 
-  server.collectHeaders("X-API-Key");
+  const char* headerKeys[] = { "X-API-Key", "X-Confirm-Empty-Cards" };
+  server.collectHeaders(headerKeys, 2);
   server.on("/", HTTP_GET, hPage);
   server.on("/api/info", HTTP_GET, hInfo);
   server.on("/api/scan", HTTP_GET, hScan);
   server.on("/api/config", HTTP_POST, hConfig);
   server.on("/api/portal", HTTP_POST, hPortalNow);
   server.on("/api/status", HTTP_GET, hStatus);
+  server.on("/api/cards", HTTP_GET, hCards);
   server.on("/api/open", HTTP_POST, hOpen);
   server.on("/api/close", HTTP_POST, hClose);
   server.on("/api/enroll", HTTP_POST, hEnroll);
