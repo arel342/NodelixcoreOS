@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const tsModule = require('./tailscale');
 
 // ================= .env (tanpa dependency tambahan) =================
 const ENV_FILE = path.join(__dirname, '.env');
@@ -266,6 +267,24 @@ app.post('/api/settings/lang', (req, res) => {
     saveEnv('LANGUAGE', l);
     res.json({ success: true, message: T('set.saved') });
 });
+// Status Tailscale (tanpa login — hanya info status lokal, tidak ada data sensitif)
+app.get('/api/tailscale/status', async (req, res) => {
+    try {
+        const enabled = String(env('TAILSCALE_ENABLE', 'false')).toLowerCase() === 'true';
+        const status = enabled ? await tsModule.tailscaleStatus() : { ok: false, code: 'disabled' };
+        const origin = tsModule.tailscaleOrigin(process.env);
+        res.json({
+            enabled,
+            status,
+            configuredOrigin: origin || '',
+            ip: String(env('TAILSCALE_IP', '')),
+            port: env('TAILSCALE_PORT', env('PORT', '3000'))
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Semua API data, file, perangkat, dan /uploads wajib login (halaman login di /public
 // tetap terbuka). Daftar PUBLIC_API di bawah adalah SATU-SATUNYA pengecualian; endpoint
 // /api lain tanpa sesi sah langsung ditolak 401. Sebelumnya daftar rute yang dilindungi
@@ -733,11 +752,23 @@ app.use((err, req, res, next) => {
     res.status(status).type('text/plain').send(status >= 500 ? 'Internal Server Error' : 'Bad Request');
 });
 
-function printBanner() {
+async function printBanner() {
     const ips = Object.values(os.networkInterfaces()).flat().filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address)
         .sort((a, b) => (/^169\.254\./.test(a) ? 1 : 0) - (/^169\.254\./.test(b) ? 1 : 0));   // alamat link-local paling belakang
     const list = ips.length ? ips : ['localhost'];
     const port = env('PORT', 3000);
+    let tsBannerLine = 'Tailscale   : nonaktif (set TAILSCALE_ENABLE=true di .env)';
+    if (String(env('TAILSCALE_ENABLE', 'false')).toLowerCase() === 'true') {
+        const ts = await tsModule.tailscaleStatus();
+        const tsOrigin = tsModule.tailscaleOrigin(process.env);
+        if (ts.ok && ts.tailscaleIp) {
+            tsBannerLine = `Tailscale   : http://${ts.tailscaleIp}:${port} (online: ${ts.online ? 'ya' : 'tidak'})`;
+        } else if (tsOrigin) {
+            tsBannerLine = `Tailscale   : ${tsOrigin} (konfigurasi manual)`;
+        } else {
+            tsBannerLine = 'Tailscale   : aktif — jalankan "tailscale up" lalu isi TAILSCALE_IP di .env';
+        }
+    }
     console.log('=================================');
     if (setupRequired()) {
         list.forEach(ip => console.log(`Setup awal: http://${ip}:${port}/setup.html`));
@@ -752,6 +783,7 @@ function printBanner() {
     console.log(`ESP32       : http://${env('ESP32_IP', '(belum diisi)')}:${env('ESP32_PORT', 80)}`);
     console.log(`Pintu RFID  : http://${env('DOOR_IP', '(belum diisi)')}:${env('DOOR_PORT', 80)}`);
     console.log(`AI Agent    : ${env('GEMINI_API_KEY') ? 'kunci Gemini terisi (model ' + env('GEMINI_MODEL', 'gemini-3.5-flash-lite') + ')' : 'GEMINI_API_KEY kosong - isi lewat setup awal atau tab Pengaturan'}`);
+    console.log(tsBannerLine);
     storage.status().then(st => console.log(st.ready ? `Penyimpanan : ${st.root} (siap, mode ${st.mode})` : `PENYIMPANAN BELUM SIAP: ${st.message}`));
     console.log('=================================');
 }
