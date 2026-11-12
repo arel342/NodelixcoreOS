@@ -978,3 +978,98 @@ Di mode setup kedua perangkat menyalakan WiFi tanpa password (`Nodelix-ESP32-xxx
 Di tab **Pintu RFID / Lock Door**, tekan menu **⋮** pada kartu terdaftar untuk mengubah nama, menghapus kartu, atau memilih **Jadikan kartu admin**. Penetapan admin memerlukan password login dashboard saat ini (diverifikasi di server). Kartu admin tetap bisa membuka pintu ketika lock door dimatikan. **Hapus admin** hanya mencabut hak admin, tidak menghapus kartu dari daftar.
 
 **Wajib unggah ulang `frimware/esp8266 lock door.ino` (versi 1.1 ke atas)** agar ESP8266 mengenali kartu admin. Status admin disimpan di server dan disinkronkan ke LittleFS ESP8266, sehingga tetap berlaku saat server offline atau ESP restart setelah sinkronisasi. Perubahan saat perangkat offline baru berlaku di pintu setelah sinkronisasi berhasil. Kartu lama otomatis tetap menjadi kartu biasa.
+
+
+---
+
+## Akses privat dari luar jaringan menggunakan Tailscale
+
+NodelixcoreOS mendukung akses jarak jauh melalui **Tailscale**. Dengan Tailscale, perangkat server dan perangkat klien harus masuk ke Tailnet yang sama (atau memiliki izin akses yang sesuai). Koneksi dilakukan melalui alamat IP Tailscale atau MagicDNS, bukan dengan membuka port server ke internet publik.
+
+### Cara kerja
+
+- NodelixcoreOS tetap berjalan sebagai server Node.js + Express pada port yang dikonfigurasi (default `3000`).
+- Tailscale menyediakan jaringan privat antarperangkat.
+- Dashboard, REST API, WebSocket, dan API autentikasi mobile diakses melalui alamat Tailscale server.
+- Tailscale tidak menggantikan autentikasi NodelixcoreOS. Login admin dan autentikasi perangkat mobile tetap wajib.
+- Akses hanya diberikan kepada perangkat/anggota Tailnet yang diizinkan oleh kebijakan ACL/Grants Tailscale.
+
+### Persiapan di Android/Termux
+
+1. Instal dan login aplikasi Tailscale pada perangkat server.
+2. Pastikan perangkat server berstatus **Connected** di Tailnet.
+3. Pastikan perintah CLI `tailscale status` dan `tailscale ip -4` dapat dijalankan dari lingkungan Termux yang menjalankan Node.js.
+4. Jalankan NodelixcoreOS seperti biasa.
+
+Jika CLI Tailscale tidak ditemukan oleh Termux, pastikan lokasi binary Tailscale tersedia pada `PATH` proses Node.js. Modul `tailscale.js` mencari binary bernama `tailscale` pada setiap direktori di `PATH`, lalu menggunakan CLI untuk membaca status dan IP.
+
+### Konfigurasi NodelixcoreOS
+
+Tambahkan atau sesuaikan variabel berikut pada file `.env`:
+
+```env
+TAILSCALE_ENABLE=true
+TAILSCALE_IP=
+TAILSCALE_PORT=3000
+# Opsional, jika ingin menetapkan URL secara eksplisit:
+# TAILSCALE_ORIGIN=http://100.x.y.z:3000
+```
+
+Keterangan:
+
+| Variabel | Fungsi |
+| --- | --- |
+| `TAILSCALE_ENABLE` | Mengaktifkan pembacaan status Tailscale oleh server |
+| `TAILSCALE_IP` | IP Tailscale server; kosongkan untuk membaca status CLI secara otomatis |
+| `TAILSCALE_PORT` | Port NodelixcoreOS yang digunakan melalui Tailnet |
+| `TAILSCALE_ORIGIN` | Origin server eksplisit; opsional |
+
+Setelah mengubah konfigurasi, restart NodelixcoreOS. Endpoint informasi status tersedia di `/api/tailscale/status`. Endpoint ini hanya menampilkan status koneksi dan alamat konfigurasi; endpoint tersebut bukan mekanisme autentikasi.
+
+### Mengakses dashboard
+
+Dari perangkat lain yang sudah terhubung ke Tailnet, buka:
+
+```text
+http://IP-TAILSCALE-SERVER:3000
+```
+
+Contoh format alamat (ganti dengan IP Tailscale perangkat server yang sebenarnya):
+
+```text
+http://100.x.y.z:3000
+```
+
+Jika MagicDNS aktif, nama perangkat Tailnet juga dapat digunakan sebagai hostname. Gunakan port yang sama dengan konfigurasi `PORT` / `TAILSCALE_PORT`.
+
+### Menghubungkan NodelixcoreOS Mobile
+
+NodelixcoreOS mendukung **NodelixcoreOS Mobile** melalui API mobile dan autentikasi perangkat. Untuk akses jarak jauh:
+
+1. Instal dan login Tailscale pada perangkat Android yang menjalankan NodelixcoreOS Mobile.
+2. Pastikan perangkat Android dan server berada pada Tailnet yang sama dan kebijakan akses mengizinkan koneksi ke server.
+3. Pada pengaturan koneksi aplikasi, masukkan Base URL server menggunakan IP Tailscale atau MagicDNS, termasuk port, misalnya `http://100.x.y.z:3000`.
+4. Daftarkan perangkat melalui proses autentikasi aplikasi yang disediakan server.
+
+Autentikasi mobile menggunakan ECDSA P-256 dan sesi Bearer. Jangan membagikan token sesi atau private key perangkat. Tailscale menyediakan jalur jaringan privat; autentikasi aplikasi tetap menjadi lapisan keamanan tersendiri.
+
+### Keamanan yang disarankan
+
+- Jangan melakukan port forwarding router ke internet hanya untuk mengakses NodelixcoreOS melalui Tailscale.
+- Batasi anggota dan perangkat Tailnet melalui ACL/Grants Tailscale.
+- Gunakan password admin yang kuat dan jangan membagikan kredensial.
+- Biarkan endpoint dan API tetap dilindungi autentikasi NodelixcoreOS.
+- Hindari mengaktifkan terminal web kecuali benar-benar diperlukan.
+- Jangan mengunggah file `.env`, token Telegram, API key, data sesi, atau private key ke GitHub.
+- HTTP di dalam Tailnet tetap bukan HTTPS end-to-end aplikasi. Untuk kebutuhan TLS, gunakan konfigurasi HTTPS/reverse proxy yang benar dan sesuaikan origin aplikasi.
+
+## NodelixcoreOS Mobile — Source dan APK
+
+Repository server ini menyediakan backend/API untuk **NodelixcoreOS Mobile**. Aplikasi Android terhubung ke server melalui LAN atau Tailnet Tailscale, menggunakan REST API, WebSocket, dan autentikasi perangkat yang didukung server.
+
+File source Android dan APK hasil build akan dipublikasikan melalui halaman **Releases** repository ini. Jika belum ada release yang diterbitkan, bagian Releases mungkin masih kosong.
+
+- [Lihat Releases NodelixcoreOS](https://github.com/arel342/NodelixcoreOS/releases)
+- [Lihat source server](https://github.com/arel342/NodelixcoreOS)
+
+Pastikan versi aplikasi yang diunduh kompatibel dengan versi API server yang digunakan. APK merupakan artefak build; source Android tetap perlu disertakan agar perubahan aplikasi dapat ditinjau dan dibangun ulang.
